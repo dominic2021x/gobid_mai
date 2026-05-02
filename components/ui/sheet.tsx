@@ -44,7 +44,6 @@ function SheetContent({
   side = "right",
   hideClose = false,
   overlayClassName,
-  "aria-describedby": ariaDescribedBy,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left";
@@ -71,8 +70,10 @@ function SheetContent({
           className,
         )}
         {...props}
-        aria-describedby={ariaDescribedBy ?? undefined}
       >
+        <SheetPrimitive.Description className="sr-only">
+          Panou lateral: filtre și acțiuni pentru listări.
+        </SheetPrimitive.Description>
         {children}
         {!hideClose && (
           <SheetPrimitive.Close className="ring-offset-background focus:ring-ring data-[state=open]:bg-secondary absolute top-4 right-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none">
