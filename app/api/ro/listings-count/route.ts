@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { normalizeRoListingsSearchParams } from "@/lib/ro/normalizedListingsQuery";
 import { resolveAccess } from "@/lib/server/access/resolveAccess";
-import { countProducts } from "@/lib/server/products/listingsCountRepo";
+import { countProducts, countProductsWithEstimateMeta } from "@/lib/server/products/listingsCountRepo";
 import { buildLastKnownGoodSnapshotKey } from "@/lib/server/lastKnownGoodSnapshot";
 import { getProductsDerivedDataVersion } from "@/lib/server/products/derivedDataVersion";
 import { getOrLoadFromSharedTtlCache } from "@/lib/server/sharedTtlCache";
@@ -39,21 +39,28 @@ export async function GET(request: NextRequest) {
       hasExecutariAccess: access.hasExecutariAccess,
     });
 
-    const { value: total } = await getOrLoadFromSharedTtlCache<number>(
+    const exact = searchParams.get("exact") === "1";
+    const { value: payload } = await getOrLoadFromSharedTtlCache<{ total: number; total_kind?: string }>(
       LISTINGS_COUNT_CACHE_NAMESPACE,
-      cacheKey,
+      cacheKey + (exact ? ":exact" : ":estimate"),
       {
         ttlMs: LISTINGS_COUNT_CACHE_TTL_MS,
-        loader: () => countProducts(query, access),
+        loader: async () =>
+          exact
+            ? { total: await countProducts(query, access), total_kind: "exact" }
+            : countProductsWithEstimateMeta(query, access),
       },
     );
 
     if (process.env.DEBUG_LISTINGS_COUNT === "1") {
       // eslint-disable-next-line no-console
-      console.debug("[listings-count] total", total);
+      console.debug("[listings-count] total", payload.total, payload.total_kind);
     }
 
-    const res = NextResponse.json({ success: true, total }, { status: 200 });
+    const res = NextResponse.json(
+      { success: true, total: payload.total, ...(payload.total_kind ? { total_kind: payload.total_kind } : {}) },
+      { status: 200 },
+    );
     res.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
     return res;
   } catch (error: unknown) {

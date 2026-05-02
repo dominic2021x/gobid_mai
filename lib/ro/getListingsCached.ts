@@ -6,7 +6,8 @@
 
 import { unstable_cache } from "next/cache";
 import { normalizeListingsSearchQText } from "@/lib/listings/filters/qSearchAutocorrect";
-import { countProducts } from "@/lib/server/products/listingsCountRepo";
+import { countProductsWithEstimateMeta } from "@/lib/server/products/listingsCountRepo";
+import type { RoListingsTotalKind } from "@/lib/server/products/listingsCountRepo";
 import { getRoListings } from "@/lib/ro/listingsRepo";
 import type { ProductQuery, RoListingsResult } from "@/lib/ro/listingsRepo";
 import { RO_LISTINGS_MAX_PAGE, RO_LISTINGS_PAGE_SIZE_DESKTOP } from "@/lib/ro/roListingsPagination";
@@ -160,26 +161,26 @@ export async function getListingsCachedFromFullSearchParams(
   )();
 }
 
-/** Strict total count for the same URL (aligned with /api/ro/listings-count). */
-export async function getListingsCountCachedFromFullSearchParams(
+/** Total + kind for the same URL (aligned with GET /api/ro/listings merged count). */
+export async function getListingsCountEstimateMetaCachedFromFullSearchParams(
   raw: Record<string, string | string[] | undefined>,
   access?: AccessContext,
-): Promise<number> {
+): Promise<{ total: number; totalKind: RoListingsTotalKind } | undefined> {
   const { query: base } = normalizeRoListingsRawSearchParams(raw);
   const key = stableSortedJson({
     ...(base as unknown as Record<string, unknown>),
     hasExecutariAccess: access?.hasExecutariAccess === true,
   });
   if (access?.hasExecutariAccess) {
-    return countProducts(base, access);
+    return countProductsWithEstimateMeta(base, access);
   }
   const categorySlug = normalizeCategoryTag(base.categorie);
   const tags = categorySlug
     ? ["ro-listings", `ro-listings:category:${categorySlug}`]
     : ["ro-listings"];
   return unstable_cache(
-    () => countProducts(base, access),
-    ["ro-listings-count-full", key],
-    { revalidate: CACHE_REVALIDATE_SECONDS, tags }
+    () => countProductsWithEstimateMeta(base, access),
+    ["ro-listings-count-estimate-full", key],
+    { revalidate: CACHE_REVALIDATE_SECONDS, tags },
   )();
 }

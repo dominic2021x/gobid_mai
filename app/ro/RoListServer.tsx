@@ -1,20 +1,22 @@
 import {
   getListingsCachedFromFullSearchParams,
-  getListingsCountCachedFromFullSearchParams,
+  getListingsCountEstimateMetaCachedFromFullSearchParams,
 } from "@/lib/ro/getListingsCached";
 import { loadPersonalizedRoHomePreview } from "@/lib/ro/personalizedRoHomePreview";
 import { getAppliedInternalLinksForSource } from "@/lib/growth/internalLinks";
 import { normalizeRoListingsRawSearchParams } from "@/lib/ro/normalizedListingsQuery";
+import { normalizeRoListingsSortKey } from "@/lib/ro/roListingsSortParam";
 import { mergeDefaultRoListingsLimitForSsr } from "@/lib/ro/roListingsPagination";
 import { headers } from "next/headers";
 import { resolveAccess } from "@/lib/server/access/resolveAccess";
 import { serializeListingForClient } from "@/lib/ro/roListingsServerUtils";
-import RoAuctionsViewClient from "./RoAuctionsViewClient";
+import { RoAuctionsViewClient } from "./RoAuctionsViewClient";
 import type { InitialListingsPayload } from "./types";
 
 /**
- * Server Component: sole caller of cached listings + count for /ro (full URL parity with /api/ro/listings).
+ * Server Component: cached listings + estimate count for /ro (parity with GET /api/ro/listings).
  * Client receives a JSON snapshot; infinite scroll appends via /api/ro/listings only.
+ * Phase 4.1 (optional): split first-fold listings into an async child + `<Suspense>` for earlier LCP.
  */
 export default async function RoListServer({
   searchParams,
@@ -38,16 +40,18 @@ export default async function RoListServer({
     !normalized.query.listingsCursor &&
     page <= 1;
 
-  const [result, resurseUtileLinks, totalCount, personalizedPreviewItems] = await Promise.all([
+  const [result, resurseUtileLinks, countMeta, personalizedPreviewItems] = await Promise.all([
     getListingsCachedFromFullSearchParams(searchParamsWithViewportLimit, access),
     getAppliedInternalLinksForSource("/ro"),
-    getListingsCountCachedFromFullSearchParams(searchParamsWithViewportLimit, access).catch(() => undefined as undefined),
+    getListingsCountEstimateMetaCachedFromFullSearchParams(searchParamsWithViewportLimit, access).catch(
+      () => undefined as undefined,
+    ),
     allowPersonalizedHome ? loadPersonalizedRoHomePreview(access) : Promise.resolve([] as Record<string, unknown>[]),
   ]);
 
   const plainItems = result.items.map(serializeListingForClient);
-  /** Do not use `result.totalMatched` for UI totals — Supabase scan can exit early (underestimate). */
-  const initialTotal = typeof totalCount === "number" ? totalCount : undefined;
+  const initialTotal = typeof countMeta?.total === "number" ? countMeta.total : undefined;
+  const initialTotalKind = countMeta?.totalKind;
   const initialListings: InitialListingsPayload = {
     items: plainItems,
     nextFrom: result.nextFrom,
@@ -55,7 +59,9 @@ export default async function RoListServer({
     pageSize: normalized.query.limit,
     nextCursor: result.nextCursor ?? null,
     hasMore: result.hasMore,
+    snapshotSort: normalizeRoListingsSortKey(normalized.searchParams.get("sort")),
     ...(typeof initialTotal === "number" ? { totalCount: initialTotal } : {}),
+    ...(initialTotalKind ? { totalKind: initialTotalKind } : {}),
     source: "ssr",
     ...(personalizedPreviewItems.length > 0
       ? { personalizedHomePreview: { items: personalizedPreviewItems } }

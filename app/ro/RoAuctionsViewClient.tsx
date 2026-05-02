@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useRef, useCallback, useTransition } from "react";
+import React, { Suspense, useState, useEffect, useMemo, useRef, useCallback, useTransition } from "react";
 import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
 import Image from "next/image";
@@ -49,6 +49,7 @@ import { ProgressiveImage } from "@/components/image/ProgressiveImage";
 import { notifyGuestFavoritesUpdated } from "@/lib/favorites/mergeGuestFavorites";
 import SearchRecoveryCard from "@/components/ro/SearchRecoveryCard";
 import { buildListingsApiParams } from "@/lib/ro/roListingsApiParams";
+import { normalizeRoListingsSortKey, sortKeyToApiParam } from "@/lib/ro/roListingsSortParam";
 import { stripBrandTokensFromSearchQuery } from "@/lib/listings/filters/searchQueryBrand";
 import type { InitialListingsPayload, ResurseUtileLinkItem } from "./types";
 import pLimit from "p-limit";
@@ -332,19 +333,7 @@ function markLocationPromptSeen() {
 }
 
 function parseSortParamFromUrl(raw: string | null | undefined): string {
-  const sortParam = (raw ?? "").trim() || "relevant";
-  if (
-    sortParam === "relevant" ||
-    sortParam === "newest" ||
-    sortParam === "oldest" ||
-    sortParam === "timeLeft" ||
-    sortParam === "priceLow" ||
-    sortParam === "priceHigh" ||
-    sortParam === "title"
-  ) {
-    return sortParam;
-  }
-  return "relevant";
+  return normalizeRoListingsSortKey(raw);
 }
 
 function ResurseUtileBlock({ links }: { links: ResurseUtileLinkItem[] }) {
@@ -724,11 +713,22 @@ type RoListingsResponse = {
   nextCursor?: string | null;
   hasMore?: boolean;
   total?: number;
+  /** Aliniat cu `count_ro_listings_enterprise_estimate` — `exact` | `estimate` | `capped`. */
+  total_kind?: "exact" | "estimate" | "capped";
   error?: string;
 };
 
 const RO_LISTINGS_CLIENT_CACHE_TTL_MS = 30_000;
 const RO_LISTINGS_CLIENT_CACHE_MAX_ENTRIES = 60;
+const RO_LISTINGS_SESSION_PREFIX = "roListings:v1:";
+
+function roListingsUrlHashKey(url: string): string {
+  let h = 0;
+  for (let i = 0; i < url.length; i++) {
+    h = (Math.imul(31, h) + url.charCodeAt(i)) | 0;
+  }
+  return `${RO_LISTINGS_SESSION_PREFIX}${(h >>> 0).toString(16)}`;
+}
 
 type RoListingsClientCacheEntry = {
   payload: RoListingsResponse;
@@ -756,6 +756,16 @@ function getRoListingsClientCache(url: string): RoListingsResponse | null {
 
 function setRoListingsClientCache(url: string, payload: RoListingsResponse): void {
   roListingsClientCache.set(url, { payload, ts: Date.now() });
+  if (typeof window !== "undefined") {
+    try {
+      sessionStorage.setItem(
+        roListingsUrlHashKey(url),
+        JSON.stringify({ payload, ts: Date.now() }),
+      );
+    } catch {
+      // ignore quota / private mode
+    }
+  }
   if (roListingsClientCache.size <= RO_LISTINGS_CLIENT_CACHE_MAX_ENTRIES) return;
   const oldestKey = roListingsClientCache.keys().next().value as string | undefined;
   if (oldestKey) roListingsClientCache.delete(oldestKey);
@@ -765,13 +775,33 @@ async function fetchRoListingsJsonCached(url: string, signal?: AbortSignal): Pro
   if (signal?.aborted) throw createAbortError();
 
   const cached = getRoListingsClientCache(url);
-  if (cached) return cached;
+  if (cached) {
+    if (signal?.aborted) throw createAbortError();
+    return cached;
+  }
+
+  if (typeof window !== "undefined") {
+    try {
+      const raw = sessionStorage.getItem(roListingsUrlHashKey(url));
+      if (raw) {
+        const entry = JSON.parse(raw) as { payload?: RoListingsResponse; ts?: number };
+        if (entry?.payload && typeof entry.ts === "number" && Date.now() - entry.ts <= RO_LISTINGS_CLIENT_CACHE_TTL_MS) {
+          setRoListingsClientCache(url, entry.payload);
+          if (signal?.aborted) throw createAbortError();
+          return entry.payload;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
 
   let promise = roListingsInFlight.get(url);
   if (!promise) {
     promise = fetch(url, {
       method: "GET",
       cache: "no-store",
+      signal,
     }).then(async (res) => {
       if (!res.ok) {
         const text = await res.text().catch(() => "");
@@ -2693,6 +2723,8 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
   );
   const [hasMoreRemote, setHasMoreRemote] = useState(initialListings?.hasMore ?? true);
   const [isGeoRadiusRefreshing, setIsGeoRadiusRefreshing] = useState(false);
+  /** Ultimul fetch geo la `/api/ro/listings` a eșuat — nu tăiem feed-ul SSR după rază (altfel grid gol). */
+  const [geoListingsFetchFailed, setGeoListingsFetchFailed] = useState(false);
   /** Rânduri API relaxate (fără rază strictă) când feed-ul principal e gol — alimentează `auctions`. */
   const [relaxedBackupProducts, setRelaxedBackupProducts] = useState<Record<string, unknown>[]>([]);
   /** Extra carduri afișate în același grid când lista principală e sub prag; deduplicate față de `paginatedItems`. */
@@ -2705,10 +2737,17 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       ? initialListings.totalCount
       : null
   );
-  /** După primul răspuns valid de la `/api/ro/listings-count` pentru query-ul curent — evită „304 pagini” SSR apoi 182 la API. */
-  const [listingsCountAuthoritative, setListingsCountAuthoritative] = useState(false);
+  const [totalKindFromDb, setTotalKindFromDb] = useState<"exact" | "estimate" | "capped" | null>(
+    () => initialListings?.totalKind ?? null,
+  );
+  /** După primul răspuns valid cu total (listări + count unificat SSR/API). */
+  const [listingsCountAuthoritative, setListingsCountAuthoritative] = useState(
+    () =>
+      typeof initialListings?.totalCount === "number" &&
+      initialListings.totalCount >= (initialListings?.items?.length ?? 0),
+  );
   const [rowsScannedFromDb, setRowsScannedFromDb] = useState<number | null>(null);
-  const SHOW_FILTER_OPTION_COUNTS = false;
+  const SHOW_FILTER_OPTION_COUNTS = true;
   const [categoryCountsFromDb, setCategoryCountsFromDb] = useState<Record<string, number>>({});
   const [subcategoryCountsFromDb, setSubcategoryCountsFromDb] = useState<Record<string, number>>({});
   const [locationCountsFromDb, setLocationCountsFromDb] = useState<Record<string, number>>({});
@@ -2735,6 +2774,21 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     return () => window.clearTimeout(timer);
   }, [locationRadiusKm, nearLat, nearLng]);
 
+  /**
+   * Filtru strict pe rază în API (șterge location/city din query) doar pentru GPS / „Locația mea”.
+   * Pentru oraș selectat manual, geocodarea setează nearLat/Lng doar pentru sortare după distanță în UI —
+   * dacă am trimite și radius la API, am înlocui locality_search (SSR) cu Haversine și lista „dispare”.
+   */
+  const listingsUseServerGeoRadius = useMemo(
+    () =>
+      locationCenterFromGps &&
+      nearLat != null &&
+      nearLng != null &&
+      Number.isFinite(nearLat) &&
+      Number.isFinite(nearLng),
+    [locationCenterFromGps, nearLat, nearLng],
+  );
+
   // Listare și load more: parametri din URL + scope din state (ca checkbox-urile scope să aibă efect imediat).
   const fetchRoListingsPage = useCallback(
     async (
@@ -2758,9 +2812,9 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       } else {
         sp.delete("includeExecutari");
       }
-      if (nearLat != null && nearLng != null && Number.isFinite(nearLat) && Number.isFinite(nearLng)) {
-        sp.set("nearLat", String(Number(nearLat.toFixed(6))));
-        sp.set("nearLng", String(Number(nearLng.toFixed(6))));
+      if (listingsUseServerGeoRadius) {
+        sp.set("nearLat", String(Number(nearLat!.toFixed(6))));
+        sp.set("nearLng", String(Number(nearLng!.toFixed(6))));
         // Fast geo mode: show nearest listings immediately instead of scanning a strict radius first.
         sp.delete("location");
         sp.delete("locations");
@@ -2768,15 +2822,14 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
         sp.delete("radiusKm");
         sp.set("radiusKm", String(clampRoRadiusKmForApi(remoteLocationRadiusKm)));
       }
+      sp.set("sort", sortKeyToApiParam(sortBy));
       const params = buildListingsApiParams(sp, from, limit, cursor);
-      if (nearLat != null && nearLng != null && Number.isFinite(nearLat) && Number.isFinite(nearLng)) {
+      if (listingsUseServerGeoRadius) {
         params.set("mode", "background");
-      } else {
-        params.set("mode", "instant");
       }
       return fetchRoListingsJsonCached(`/api/ro/listings?${params.toString()}`, signal);
     },
-    [searchParams, listingsScope, includeExecutariCrosslist, nearLat, nearLng, remoteLocationRadiusKm]
+    [searchParams, listingsScope, includeExecutariCrosslist, listingsUseServerGeoRadius, nearLat, nearLng, remoteLocationRadiusKm, sortBy]
   );
 
   /** Același contract ca fetchRoListingsPage, dar fără radiusKm — completare când rază strictă returnează 0 rezultate. */
@@ -2793,22 +2846,21 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       }
       sp.delete("radiusKm");
       sp.delete("locations");
-      if (nearLat != null && nearLng != null && Number.isFinite(nearLat) && Number.isFinite(nearLng)) {
-        sp.set("nearLat", String(Number(nearLat.toFixed(6))));
-        sp.set("nearLng", String(Number(nearLng.toFixed(6))));
+      if (listingsUseServerGeoRadius) {
+        sp.set("nearLat", String(Number(nearLat!.toFixed(6))));
+        sp.set("nearLng", String(Number(nearLng!.toFixed(6))));
         // Pentru fallback „cele mai apropiate”, nu mai limităm la localitatea selectată.
         sp.delete("location");
         sp.delete("city");
       }
+      sp.set("sort", sortKeyToApiParam(sortBy));
       const params = buildListingsApiParams(sp, from, limit, cursor);
-      if (nearLat != null && nearLng != null && Number.isFinite(nearLat) && Number.isFinite(nearLng)) {
+      if (listingsUseServerGeoRadius) {
         params.set("mode", "background");
-      } else {
-        params.set("mode", "instant");
       }
       return fetchRoListingsJsonCached(`/api/ro/listings?${params.toString()}`, signal);
     },
-    [searchParams, listingsScope, includeExecutariCrosslist, nearLat, nearLng, locationCenterFromGps]
+    [searchParams, listingsScope, includeExecutariCrosslist, listingsUseServerGeoRadius, nearLat, nearLng, sortBy]
   );
 
   const fetchRoListingsPageRef = useRef(fetchRoListingsPage);
@@ -2828,8 +2880,10 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
    */
   const roPaginationFiltersSignature = useMemo(
     () =>
-      `${filtersSignatureFromUrl}|geo:${nearLat ?? ""}:${nearLng ?? ""}|r${clampRoRadiusKmForApi(remoteLocationRadiusKm)}`,
-    [filtersSignatureFromUrl, nearLat, nearLng, remoteLocationRadiusKm],
+      `${filtersSignatureFromUrl}|geo:${
+        listingsUseServerGeoRadius ? `${nearLat ?? ""}:${nearLng ?? ""}` : ""
+      }|r${listingsUseServerGeoRadius ? clampRoRadiusKmForApi(remoteLocationRadiusKm) : ""}`,
+    [filtersSignatureFromUrl, listingsUseServerGeoRadius, nearLat, nearLng, remoteLocationRadiusKm],
   );
 
   const personalizedHomeItems = initialListings?.personalizedHomePreview?.items ?? [];
@@ -2886,6 +2940,17 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
 
   const [isPageNavigating, setIsPageNavigating] = useState(false);
   const [pendingPage, setPendingPage] = useState<number | null>(null);
+  /**
+   * În timpul `startRouteTransition`, `useSearchParams()` poate rămâne în urmă față de bara de adresă.
+   * `pendingPage` reflectă imediat click-ul din paginare — altfel fetch-ul folosea offset-ul paginii vechi,
+   * iar răspunsurile „în curs” puteau suprascrie lista cu date din pagina greșită la navigare rapidă.
+   */
+  const listingsOffsetForFetch = useMemo(() => {
+    if (pendingPage != null) {
+      return (pendingPage - 1) * listingsPageSize;
+    }
+    return listingsOffset;
+  }, [pendingPage, listingsOffset, listingsPageSize]);
   const paginationPrefetchAbortRef = useRef<AbortController | null>(null);
   const pendingListingsPageCursorRef = useRef<string | null>(null);
 
@@ -2923,6 +2988,33 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     },
     [fetchRoListingsPage, listingsPageSize, listingsUrlPage, nextRemoteCursor, router, searchParams, startRouteTransition],
   );
+
+  const prefetchListingsPageHover = useCallback(
+    (page: number) => {
+      const capped = Math.min(Math.max(1, Math.round(page)), RO_LISTINGS_MAX_PAGE);
+      if (capped === listingsUrlPage) return;
+      const nextOffset = (capped - 1) * listingsPageSize;
+      const sp = new URLSearchParams(searchParams?.toString() ?? "");
+      if (capped <= 1) {
+        sp.delete("page");
+        sp.delete("from");
+      } else {
+        sp.set("page", String(capped));
+        sp.delete("from");
+      }
+      const cursorForSequentialNext = capped === listingsUrlPage + 1 ? nextRemoteCursor : null;
+      void fetchRoListingsPage(nextOffset, listingsPageSize, cursorForSequentialNext, undefined, sp).catch(() => {});
+    },
+    [fetchRoListingsPage, listingsPageSize, listingsUrlPage, nextRemoteCursor, searchParams],
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const p = listingsUrlPage;
+    for (const n of [p - 1, p + 1]) {
+      if (n >= 1 && n <= RO_LISTINGS_MAX_PAGE) prefetchListingsPageHover(n);
+    }
+  }, [listingsUrlPage, prefetchListingsPageHover]);
 
   useEffect(() => {
     if (pendingPage == null) return;
@@ -2986,22 +3078,30 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
   }, []);
 
   const activeExactRequestIdRef = useRef(0);
-  const hasGeoCenter = nearLat != null && nearLng != null && Number.isFinite(nearLat) && Number.isFinite(nearLng);
-
   useEffect(() => {
     const controller = new AbortController();
     const requestId = ++activeExactRequestIdRef.current;
     const firstPage = initialListings?.items || [];
     const firstPageFiltered = filterRows(firstPage);
+    const urlSortNorm = normalizeRoListingsSortKey(searchParams?.get("sort"));
+    const snapshotSortFromServer =
+      initialListings?.snapshotSort !== undefined
+        ? normalizeRoListingsSortKey(initialListings.snapshotSort)
+        : urlSortNorm;
+    const sortMatchesSnapshot =
+      initialListings == null ||
+      (snapshotSortFromServer === urlSortNorm && sortBy === urlSortNorm);
     const canUseServerSnapshot =
       initialListings != null &&
-      !hasGeoCenter &&
-      listingsOffset === (initialListings?.from ?? 0) &&
+      sortMatchesSnapshot &&
+      !listingsUseServerGeoRadius &&
+      listingsOffsetForFetch === (initialListings?.from ?? 0) &&
       listingsPageSize === serverSnapshotLimit;
 
     const commitExactPayload = (payload: {
       items?: Record<string, unknown>[];
       total?: number;
+      total_kind?: "exact" | "estimate" | "capped";
       nextFrom?: number;
       nextCursor?: string | null;
       hasMore?: boolean;
@@ -3009,7 +3109,11 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       if (activeExactRequestIdRef.current !== requestId) return;
       const page = Array.isArray(payload.items) ? payload.items : [];
       setRealProducts(filterRows(page));
-      if (typeof payload.total === "number") setTotalCountFromDb(payload.total);
+      if (typeof payload.total === "number") {
+        setTotalCountFromDb(payload.total);
+        setTotalKindFromDb(payload.total_kind ?? "exact");
+        setListingsCountAuthoritative(true);
+      }
       setNextRemoteFrom(typeof payload.nextFrom === "number" ? payload.nextFrom : page.length);
       setNextRemoteCursor(payload.nextCursor ?? null);
       setHasMoreRemote(!!payload.hasMore);
@@ -3028,22 +3132,28 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     }
 
     setIsLoadingMoreRemote(true);
-    setIsGeoRadiusRefreshing(hasGeoCenter);
+    setIsGeoRadiusRefreshing(listingsUseServerGeoRadius);
+    setGeoListingsFetchFailed(false);
     const loadCurrentPage = async () => {
       try {
         const cursorForCurrentPage = pendingListingsPageCursorRef.current;
         pendingListingsPageCursorRef.current = null;
         const payload = await fetchRoListingsPageRef.current(
-          listingsOffset,
+          listingsOffsetForFetch,
           listingsPageSize,
           cursorForCurrentPage,
           controller.signal,
         );
         if (controller.signal.aborted) return;
-        if (!payload.success) return;
+        if (!payload.success) {
+          setGeoListingsFetchFailed(true);
+          return;
+        }
+        setGeoListingsFetchFailed(false);
         commitExactPayload(payload);
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") return;
+        setGeoListingsFetchFailed(true);
         console.error("Error loading products page:", error);
       } finally {
         if (!controller.signal.aborted && activeExactRequestIdRef.current === requestId) {
@@ -3058,19 +3168,19 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     filtersSignatureFromUrl,
     filterRows,
     initialListings,
-    listingsOffset,
+    listingsOffsetForFetch,
     listingsPageSize,
     serverSnapshotLimit,
-    hasGeoCenter,
+    listingsUseServerGeoRadius,
     remoteLocationRadiusKm,
-    nearLat,
-    nearLng,
+    sortBy,
+    searchParams,
   ]);
 
   useEffect(() => {
     if (!mounted || !hasMoreRemote || isLoadingMoreRemote) return;
-    const nextOffset = listingsOffset + listingsPageSize;
-    if (nextOffset <= listingsOffset || nextOffset > RO_LISTINGS_MAX_PAGE * listingsPageSize) return;
+    const nextOffset = listingsOffsetForFetch + listingsPageSize;
+    if (nextOffset <= listingsOffsetForFetch || nextOffset > RO_LISTINGS_MAX_PAGE * listingsPageSize) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       void fetchRoListingsPageRef.current(
@@ -3086,7 +3196,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [mounted, hasMoreRemote, isLoadingMoreRemote, listingsOffset, listingsPageSize, nextRemoteCursor]);
+  }, [mounted, hasMoreRemote, isLoadingMoreRemote, listingsOffsetForFetch, listingsPageSize, nextRemoteCursor]);
 
   /** Trebuie să coincidă cu `fetchRoListingsPage`: scope/crosslist + geo din state (nearLat/Lng) înlocuiește city/location/radius din URL. */
   const countQueryString = useMemo(() => {
@@ -3099,9 +3209,9 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     } else {
       sp.delete("includeExecutari");
     }
-    if (nearLat != null && nearLng != null && Number.isFinite(nearLat) && Number.isFinite(nearLng)) {
-      sp.set("nearLat", String(Number(nearLat.toFixed(6))));
-      sp.set("nearLng", String(Number(nearLng.toFixed(6))));
+    if (listingsUseServerGeoRadius) {
+      sp.set("nearLat", String(Number(nearLat!.toFixed(6))));
+      sp.set("nearLng", String(Number(nearLng!.toFixed(6))));
       sp.delete("location");
       sp.delete("locations");
       sp.delete("city");
@@ -3109,45 +3219,27 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       sp.set("radiusKm", String(clampRoRadiusKmForApi(remoteLocationRadiusKm)));
     }
     return buildRoListingsCountQueryString(sp);
-  }, [searchParams, listingsScope, includeExecutariCrosslist, nearLat, nearLng, remoteLocationRadiusKm]);
+  }, [searchParams, listingsScope, includeExecutariCrosslist, listingsUseServerGeoRadius, nearLat, nearLng, remoteLocationRadiusKm]);
 
   useEffect(() => {
     setListingsCountAuthoritative(false);
+    setTotalKindFromDb(null);
   }, [countQueryString]);
 
-  // Total count: keep it only when it does not contradict the loaded page/hasMore state.
-  // (Nu golim totalul la geo: `/api/ro/listings-count` folosește aceiași parametri ca listarea, inclusiv rază + centru.)
+  // Re-aplică snapshot SSR când revine `initialListings` (ex. navigare); count-ul strict vine din același GET ca grid-ul.
   useEffect(() => {
-    const minimumLoadedTotal = listingsOffset + realProducts.length + (hasMoreRemote ? 1 : 0);
+    if (!initialListings) return;
+    const minimumLoadedTotal = listingsOffsetForFetch + realProducts.length + (hasMoreRemote ? 1 : 0);
     const initialTotal =
-      typeof initialListings?.totalCount === "number" && initialListings.totalCount >= minimumLoadedTotal
+      typeof initialListings.totalCount === "number" && initialListings.totalCount >= minimumLoadedTotal
         ? initialListings.totalCount
         : null;
     if (typeof initialTotal === "number") {
       setTotalCountFromDb(initialTotal);
+      setTotalKindFromDb(initialListings.totalKind ?? "exact");
+      setListingsCountAuthoritative(true);
     }
-    const controller = new AbortController();
-    const fetchCount = async () => {
-      try {
-        const res = await fetch(`/api/ro/listings-count${countQueryString ? `?${countQueryString}` : ""}`, {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data?.success === true && typeof data.total === "number") {
-          if (data.total >= minimumLoadedTotal) {
-            setTotalCountFromDb(data.total);
-            setListingsCountAuthoritative(true);
-          }
-        }
-      } catch {
-        // Abort or network: ignore
-      }
-    };
-    fetchCount();
-    return () => controller.abort();
-  }, [countQueryString, hasMoreRemote, initialListings?.totalCount, listingsOffset, nearLat, nearLng, realProducts.length]);
+  }, [initialListings, listingsOffsetForFetch, hasMoreRemote, realProducts.length]);
 
   // Numere exacte din DB pentru filtre (categorii + subcategorii), via endpoint server-side.
   useEffect(() => {
@@ -4239,6 +4331,9 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
   useEffect(() => {
     setMounted(true);
     if (typeof window === "undefined") return;
+    if (process.env.NEXT_PUBLIC_ENABLE_RO_LISTINGS_SW === "1" && "serviceWorker" in navigator) {
+      void navigator.serviceWorker.register("/sw-ro-listings.js").catch(() => {});
+    }
     const mq = window.matchMedia("(min-width: 768px)");
     const apply = () => setViewportIsMdUp(mq.matches);
     apply();
@@ -5362,26 +5457,36 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       return combinedAuctions;
     }
 
-    return combinedAuctions
-      .map((auction, index) => ({
-        auction,
-        index,
-        distanceKm: getAuctionDistanceKm(
-          {
-            coordinates:
-              (auction as { coordinates?: unknown }).coordinates ??
-              resolvedListingCoordinates[String((auction as { id?: unknown; slug?: unknown }).id ?? (auction as { slug?: unknown }).slug ?? '')],
-            custom_fields: (auction as { custom_fields?: Record<string, unknown> | null }).custom_fields,
-          },
-          { lat: nearLat, lng: nearLng },
-        ),
-      }))
-      .filter(({ auction, distanceKm }) => {
-        if ((auction as { __fromRelaxedGeo?: boolean }).__fromRelaxedGeo) return true;
-        if (locationRadiusKm <= 0) return true;
-        if (distanceKm == null) return true;
-        return distanceKm <= locationRadiusKm;
-      })
+    /** În timpul fetch-ului geo sau după rețea eșuată, lista SSR poate fi națională — filtrul pe rază o golea complet. */
+    const skipRadiusFilter =
+      isLoadingMoreRemote ||
+      isGeoRadiusRefreshing ||
+      geoListingsFetchFailed;
+
+    const mapped = combinedAuctions.map((auction, index) => ({
+      auction,
+      index,
+      distanceKm: getAuctionDistanceKm(
+        {
+          coordinates:
+            (auction as { coordinates?: unknown }).coordinates ??
+            resolvedListingCoordinates[String((auction as { id?: unknown; slug?: unknown }).id ?? (auction as { slug?: unknown }).slug ?? '')],
+          custom_fields: (auction as { custom_fields?: Record<string, unknown> | null }).custom_fields,
+        },
+        { lat: nearLat, lng: nearLng },
+      ),
+    }));
+
+    const afterRadius = skipRadiusFilter
+      ? mapped
+      : mapped.filter(({ auction, distanceKm }) => {
+          if ((auction as { __fromRelaxedGeo?: boolean }).__fromRelaxedGeo) return true;
+          if (locationRadiusKm <= 0) return true;
+          if (distanceKm == null) return true;
+          return distanceKm <= locationRadiusKm;
+        });
+
+    return afterRadius
       .sort((a, b) => {
         const aHasDistance = a.distanceKm != null;
         const bHasDistance = b.distanceKm != null;
@@ -5393,7 +5498,16 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
         return a.index - b.index;
       })
       .map(({ auction }) => auction);
-  }, [combinedAuctions, locationRadiusKm, nearLat, nearLng, resolvedListingCoordinates]);
+  }, [
+    combinedAuctions,
+    locationRadiusKm,
+    nearLat,
+    nearLng,
+    resolvedListingCoordinates,
+    isLoadingMoreRemote,
+    isGeoRadiusRefreshing,
+    geoListingsFetchFailed,
+  ]);
 
   // La schimbarea filtrelor/căutării resetează la primele 30
   const filtersSignature = `${listingsScope}|${includeExecutariCrosslist ? 'exec-on' : 'exec-off'}|${selectedCategory}|${selectedCategories.join(',')}|${selectedSubcategory}|${selectedSubcategories.join(',')}|${selectedExecutariMainCategory}|${activeSelectedExecutariListCategories.join(',')}|${selectedLevel3}|${selectedPieseTipSlugs.join(',')}|${selectedSize}|${selectedSizes.join(',')}|${selectedBrand}|${selectedBrands.join(',')}|${selectedModel}|${selectedModels.join(',')}|${selectedColor}|${selectedColors.join(',')}|${JSON.stringify(priceRange)}|${location}|${selectedLocations.join(',')}|${condition}|${selectedConditions.join(',')}|${imageFilter}|${selectedSellerKinds.join(',')}|${sortBy}|${searchParams?.get?.('q') ?? ''}|r${locationRadiusKm}|${nearLat ?? ''}|${nearLng ?? ''}|free:${marketplaceFreeOnly ? '1' : '0'}`;
@@ -5816,6 +5930,13 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     return totalCountForPagination;
   }, [totalCountForPagination]);
 
+  const resultsSummaryTotalLabel = useMemo(() => {
+    if (typeof totalCountFromDb !== "number" || resultsSummaryDenominator == null) return null;
+    if (totalKindFromDb === "capped" && totalCountFromDb >= 1001) return "peste 1.000";
+    if (totalKindFromDb === "estimate") return `~${resultsSummaryDenominator.toLocaleString("ro-RO")}`;
+    return resultsSummaryDenominator.toLocaleString("ro-RO");
+  }, [totalCountFromDb, totalKindFromDb, resultsSummaryDenominator]);
+
   const paginatedItems = useMemo(() => listForPaginationAfterFineSearch, [listForPaginationAfterFineSearch]);
   const displayedCount = listForPaginationAfterFineSearch.length;
   const totalPagesListed =
@@ -6009,7 +6130,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
   useEffect(() => {
     lastStableDisplayedListSignatureRef.current = "";
     setLastStableDisplayedList([]);
-  }, [listingsOffset, listingsPageSize]);
+  }, [listingsOffsetForFetch, listingsPageSize]);
 
   useEffect(() => {
     if (displayedList.length === 0) return;
@@ -6048,12 +6169,12 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     mounted &&
     visibleDisplayedList.length > 0 &&
     (relaxedGapFillLoading || isGeoRadiusRefreshing || isLoadingMoreRemote);
-  const displayedRangeStart = visibleDisplayedList.length > 0 ? listingsOffset + 1 : 0;
+  const displayedRangeStart = visibleDisplayedList.length > 0 ? listingsOffsetForFetch + 1 : 0;
   const displayedRangeEnd = visibleDisplayedList.length > 0
-    ? listingsOffset + visibleDisplayedList.length
+    ? listingsOffsetForFetch + visibleDisplayedList.length
     : 0;
   const displayedRangeLabel =
-    listingsOffset > 0 && displayedRangeStart > 0
+    listingsOffsetForFetch > 0 && displayedRangeStart > 0
       ? `${displayedRangeStart.toLocaleString('ro-RO')}-${displayedRangeEnd.toLocaleString('ro-RO')}`
       : visibleDisplayedList.length.toLocaleString('ro-RO');
 
@@ -6200,7 +6321,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     const currentSignature = normalizeReturnSearchSignature(window.location.search);
     if (state.searchSignature && state.searchSignature !== currentSignature) return;
     if (typeof state.page === "number" && state.page !== listingsUrlPage) return;
-    if (typeof state.offset === "number" && state.offset !== listingsOffset) return;
+    if (typeof state.offset === "number" && state.offset !== listingsOffsetForFetch) return;
     if (typeof state.limit === "number" && state.limit !== listingsPageSize) return;
     if (typeof state.filtersSignature === "string" && state.filtersSignature !== filtersSignatureFromUrl) return;
     if (typeof state.ts === "number" && Date.now() - state.ts > RO_LISTING_RETURN_TTL_MS) {
@@ -6297,7 +6418,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     isLoadingMoreRemote,
     isPageNavigating,
     isRouteTransitionPending,
-    listingsOffset,
+    listingsOffsetForFetch,
     listingsPageSize,
     listingsUrlPage,
     mounted,
@@ -7068,7 +7189,8 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
                 </p>
               </div>
             )}
-            {/* Category */}
+            {/* Category + subcategory DB counts: isolated Suspense boundary (Phase 2.4). */}
+            <Suspense fallback={null}>
             <RoFilterSection title="Categorie" isDarkMode={isDarkMode}>
               <div className="space-y-2">
                 <label className={`flex items-center gap-2 text-sm font-medium cursor-pointer ${isDarkMode ? 'text-gray-200' : 'text-gray-700'}`}>
@@ -7198,6 +7320,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
                   })}
               </div>
             </RoFilterSection>
+            </Suspense>
             {!mobileSheetLayout && renderExecutariCategoryExtras()}
 
           </>
@@ -10130,12 +10253,21 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
                     </span>
                   ) : visibleDisplayedList.length === 0 ? (
                     <span className={isDarkMode ? 'text-sky-300' : 'text-sky-700'}>
-                      Căutăm cele mai apropiate rezultate…
+                      {isLoadingMoreRemote ||
+                      isGeoRadiusRefreshing ||
+                      isPageNavigating ||
+                      isRouteTransitionPending ||
+                      isOrchestratorLoading
+                        ? "Căutăm cele mai apropiate rezultate…"
+                        : listingsUseServerGeoRadius
+                          ? `Nu am găsit anunțuri în raza de ${locationRadiusKm} km. Mărește raza din filtre sau alege „Toată România”.`
+                          : "Nu am găsit anunțuri pentru filtrele curente."}
                     </span>
                   ) : canShowStrictTotalSummary && selectedCategory !== 'all' ? (
                     <>
                       <span className={isDarkMode ? 'text-gray-200' : 'text-gray-800'}>
-                        {displayedRangeLabel} din {resultsSummaryDenominator.toLocaleString('ro-RO')} rezultate
+                        {displayedRangeLabel} din {resultsSummaryTotalLabel ?? resultsSummaryDenominator.toLocaleString("ro-RO")}{" "}
+                        rezultate
                       </span>
                       {resultsSummaryHasCompactQuery ? (
                         <>
@@ -10219,8 +10351,8 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
                       {isCompletingDisplayedResults && (
                         <span className={isDarkMode ? 'text-sky-300' : 'text-sky-700'}> · Se completează rezultatele…</span>
                       )}
-                      {canShowStrictTotalSummary && (
-                        <span> · Total: {resultsSummaryDenominator.toLocaleString('ro-RO')}</span>
+                      {canShowStrictTotalSummary && resultsSummaryTotalLabel && (
+                        <span> · Total: {resultsSummaryTotalLabel}</span>
                       )}
                     </>
                   )}
@@ -10380,7 +10512,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
                       ? 'grid gap-px px-1 md:px-0 md:gap-0.5 lg:gap-1 grid-cols-3'
                       : 'grid grid-cols-2 lg:grid-cols-3 gap-4 px-1 md:px-0 md:gap-2 lg:gap-3')
                     : 'space-y-2 md:space-y-3',
-                  isMarketplaceDataPending && "transition-opacity duration-150 opacity-85",
+                  isMarketplaceDataPending && "relative after:pointer-events-none after:absolute after:inset-0 after:animate-pulse after:rounded-lg after:bg-white/10 dark:after:bg-black/10",
                 )}
               >
                   {shouldShowResultsSkeleton
@@ -10903,11 +11035,15 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
                 <WheelPaginationFooter isDarkMode={isDarkMode}>
                   <WheelPagination
                     totalPages={displayPaginationTotalPages}
-                    currentPage={listingsUrlPage}
+                    currentPage={pendingPage ?? listingsUrlPage}
                     onPageChange={goToListingsPage}
+                    onPrefetchPage={prefetchListingsPageHover}
                     canGoNext={hasMore}
                     isDarkMode={isDarkMode}
-                    className={cn("transition-opacity duration-200", isPageNavigating && "opacity-75")}
+                    className={cn(
+                      "transition-[box-shadow] duration-200",
+                      isPageNavigating && "rounded-full shadow-[0_0_0_1px_rgba(56,189,248,0.35)]",
+                    )}
                   />
                 </WheelPaginationFooter>
               )}
@@ -10939,7 +11075,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
   );
 }
 
-export default function RoAuctionsViewClient({
+function RoAuctionsViewClient({
   resurseUtileLinks,
   initialListings,
   initialMarketplaceQ,
@@ -10962,3 +11098,6 @@ export default function RoAuctionsViewClient({
     />
   );
 }
+
+export { RoAuctionsViewClient };
+export default RoAuctionsViewClient;

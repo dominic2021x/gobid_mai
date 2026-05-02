@@ -185,7 +185,8 @@ export function buildQueryFromParams(searchParams: URLSearchParams): {
     freeOnlyRaw === "yes";
 
   const sortRaw = searchParams.get("sort")?.trim() || undefined;
-  const sort = sortRaw && ALLOWED_SORT.has(sortRaw) ? sortRaw : undefined;
+  const sortCanon = sortRaw === "timeLeft" ? "timeleft" : sortRaw;
+  const sort = sortCanon && ALLOWED_SORT.has(sortCanon) ? sortCanon : undefined;
 
   const statusParam = searchParams.get("status");
   const statusParsed = statusParam ? parseListParam(statusParam) : undefined;

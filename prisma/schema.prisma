@@ -1372,6 +1372,8 @@ model products {
   slug                          String?                         @unique
   url                           String?
   approval_status               String?                         @default("approved")
+  /// Generated in DB: coalesce(approval_status, 'approved') — see Supabase migration `ro_listings_estimate_approval_normalized`.
+  approval_normalized           String?                         @db.Text
   rejection_reason              String?
   approved_at                   DateTime?                       @db.Timestamptz(6)
   approved_by                   String?                         @db.Uuid

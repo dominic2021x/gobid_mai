@@ -19,8 +19,12 @@ export interface InitialListingsPayload {
   /** Keyset cursor when sort is created_at DESC (Prisma path); prefer over nextFrom for load-more. */
   nextCursor?: string | null;
   hasMore: boolean;
+  /** Sort folosit la SSR pentru `items` (cheie UI: relevant, newest, priceLow, …). */
+  snapshotSort?: string;
   /** Feed total for current URL when known; avoids null flash in header summary. */
   totalCount?: number;
+  /** How `totalCount` was produced — mirrors GET /api/ro/listings `total_kind`. */
+  totalKind?: "exact" | "estimate" | "capped";
   source?: "ssr";
   personalizedHomePreview?: RoPersonalizedHomePreview;
 }

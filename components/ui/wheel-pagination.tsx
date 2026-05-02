@@ -37,6 +37,8 @@ export interface WheelPaginationProps {
   totalPages: number;
   currentPage: number;
   onPageChange: (page: number) => void;
+  /** Prefetch (ex. `/api/ro/listings`) când utilizatorul trece peste o pastilă de pagină. */
+  onPrefetchPage?: (page: number) => void;
   /** Număr de pagini vizibile în jurul paginii curente (implicit 3 ca pe /ro). */
   paginationDelta?: number;
   className?: string;
@@ -54,6 +56,7 @@ export default function WheelPagination({
   totalPages,
   currentPage,
   onPageChange,
+  onPrefetchPage,
   paginationDelta = 3,
   className,
   canGoNext = true,
@@ -125,6 +128,8 @@ export default function WheelPagination({
             type="button"
             className={pillButtonClass(slot)}
             onClick={() => onPageChange(slot)}
+            onMouseEnter={() => onPrefetchPage?.(slot)}
+            onFocus={() => onPrefetchPage?.(slot)}
             aria-label={`Pagina ${slot}`}
             aria-current={safePage === slot ? "page" : undefined}
           >

@@ -10,7 +10,14 @@ import { normalizeConditionForForm } from "@/lib/attributes";
 import { type ProductQueryStrict, type RoChannel, USE_PRODUCTS_CHANNEL } from "@/lib/server/products/listingsWhere";
 import { getPieseAutoCategoryLevel3MatchVariants } from "@/lib/piese-auto/tip-piesa-level3";
 import { resolveSellerUserIdsForQuery } from "@/lib/seller/resolveSellerUserIdsForQuery";
-import { countProductsViaEnterpriseRpc, type ProductQuery } from "@/lib/server/products/listingsRepo";
+import {
+  countProductsEnterpriseEstimateMeta,
+  countProductsViaEnterpriseRpc,
+  type ProductQuery,
+  type RoListingsTotalKind,
+} from "@/lib/server/products/listingsRepo";
+
+export type { RoListingsTotalKind } from "@/lib/server/products/listingsRepo";
 import { runPostgrestQuery } from "@/lib/server/supabase/postgrest";
 import { getExecutariSubcategoryAliases } from "@/lib/listings/executari-canonical-subcategory";
 import { stripDiacritics } from "@/lib/search/normalize";
@@ -153,7 +160,7 @@ export async function countProducts(query: ProductQueryStrict, access?: AccessCo
     .select("id", { count: "exact", head: true })
     .in("status", statusFilter)
     .neq("status", "deleted")
-    .or("approval_status.is.null,approval_status.eq.approved");
+    .eq("approval_normalized", "approved");
   if (USE_PRODUCTS_CHANNEL) {
     if (scope === "live_bid") {
       builder = builder.eq("channel", "ro");
@@ -365,4 +372,18 @@ export async function countProducts(query: ProductQueryStrict, access?: AccessCo
   }
 
   return typeof count === "number" && Number.isFinite(count) ? count : 0;
+}
+
+/**
+ * Prefer enterprise estimate (reltuples / capped 1001); fall back to strict `countProducts`.
+ */
+export async function countProductsWithEstimateMeta(
+  query: ProductQueryStrict | ProductQuery,
+  access?: AccessContext,
+): Promise<{ total: number; totalKind: RoListingsTotalKind }> {
+  const resolved = await resolveSellerUserIdsForQuery(query as ProductQuery);
+  const est = await countProductsEnterpriseEstimateMeta(resolved, access);
+  if (est) return est;
+  const total = await countProducts(query as ProductQueryStrict, access);
+  return { total, totalKind: "exact" };
 }

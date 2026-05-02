@@ -29,6 +29,9 @@ export function buildListingsApiParams(
     if (!LISTINGS_ALLOWED_KEYS.has(k)) continue;
     if (v == null || String(v).trim() === "") continue;
     if (k === "from" || k === "limit" || k === "cursor") continue;
+    // Paginarea API folosește `from` + `limit`; `page` rămâne doar în URL-ul browserului.
+    // Altfel apar cereri gen from=54&page=2 — ambigue și pot încetini cache-ul / dedup-ul.
+    if (k === "page") continue;
     params.set(k, v);
   }
   return params;

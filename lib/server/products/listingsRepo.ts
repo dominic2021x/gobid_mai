@@ -22,7 +22,13 @@ import {
 import { buildPrismaWhereStrict, type RoChannel, USE_PRODUCTS_CHANNEL } from "@/lib/server/products/listingsWhere";
 import { resolveSellerUserIdsForQuery } from "@/lib/seller/resolveSellerUserIdsForQuery";
 import { enrichItemsWithImageFocal } from "@/lib/server/products/imageFocalEnrichment";
-import { decodeListingsCursor, encodeListingsCursor, isListingsKeysetSortOrder } from "@/lib/server/products/listingsCursor";
+import {
+  decodeListingsCursor,
+  encodeListingsKeysetCursor,
+  isEnterpriseListingsKeysetSort,
+  isListingsKeysetSortOrder,
+  listingsCursorMatchesSort,
+} from "@/lib/server/products/listingsCursor";
 import { isRetryablePostgrestError, runPostgrestQuery } from "@/lib/server/supabase/postgrest";
 import { haversineDistanceKm, parseCoordinatesJson } from "@/lib/geo/haversine";
 import { getProductsDerivedDataVersion } from "@/lib/server/products/derivedDataVersion";
@@ -934,13 +940,22 @@ function buildOrderByResolved(sort?: string, q?: string): OrderByResolved {
   switch (s) {
     case "price_asc":
     case "pricelow":
-      return { orderBy: { starting_price_ron: "asc" }, keysetEligible: false };
+      return {
+        orderBy: [{ starting_price_ron: "asc" }, { id: "asc" }],
+        keysetEligible: true,
+      };
     case "price_desc":
     case "pricehigh":
-      return { orderBy: { starting_price_ron: "desc" }, keysetEligible: false };
+      return {
+        orderBy: [{ starting_price_ron: "desc" }, { id: "desc" }],
+        keysetEligible: true,
+      };
     case "date_asc":
     case "oldest":
-      return { orderBy: { created_at: "asc" }, keysetEligible: false };
+      return {
+        orderBy: [{ created_at: "asc" }, { id: "asc" }],
+        keysetEligible: true,
+      };
     case "date_desc":
     case "newest":
       return {
@@ -1007,7 +1022,9 @@ async function runListingsQuery(
   const baseWhere = overrides?.where ?? buildWhere(overrides?.qOverride != null ? { ...params, q: overrides.qOverride } : params, access);
   const { orderBy, keysetEligible } = buildOrderByResolved(params.sort, qEff);
 
-  const cursorDecoded = params.listingsCursor ? decodeListingsCursor(params.listingsCursor) : null;
+  const decodedRaw = params.listingsCursor ? decodeListingsCursor(params.listingsCursor) : null;
+  const cursorDecoded =
+    decodedRaw && listingsCursorMatchesSort(decodedRaw, params.sort, qEff) ? decodedRaw : null;
   const useOffsetFallback = keysetEligible && skipLegacy > 0 && !cursorDecoded;
   const useKeyset =
     keysetEligible &&
@@ -1019,20 +1036,71 @@ async function runListingsQuery(
   let take = limit + 1;
 
   if (useKeyset && cursorDecoded) {
-    const d = new Date(cursorDecoded.ca);
-    where = {
-      AND: [
-        baseWhere,
-        {
-          OR: [
-            { created_at: { lt: d } },
-            {
-              AND: [{ created_at: { equals: d } }, { id: { lt: cursorDecoded.id } }],
-            },
-          ],
-        },
-      ],
-    };
+    if ("k" in cursorDecoded && cursorDecoded.k === "pricelow") {
+      const pr = cursorDecoded.pr ?? 0;
+      where = {
+        AND: [
+          baseWhere,
+          {
+            OR: [
+              { starting_price_ron: { gt: pr } },
+              {
+                AND: [{ starting_price_ron: { equals: pr } }, { id: { gt: cursorDecoded.id } }],
+              },
+            ],
+          },
+        ],
+      };
+    } else if ("k" in cursorDecoded && cursorDecoded.k === "pricehigh") {
+      const pr = cursorDecoded.pr ?? 0;
+      where = {
+        AND: [
+          baseWhere,
+          {
+            OR: [
+              { starting_price_ron: { lt: pr } },
+              {
+                AND: [{ starting_price_ron: { equals: pr } }, { id: { lt: cursorDecoded.id } }],
+              },
+            ],
+          },
+        ],
+      };
+    } else if ("k" in cursorDecoded && cursorDecoded.k === "oldest" && cursorDecoded.ca) {
+      const d = new Date(cursorDecoded.ca);
+      where = {
+        AND: [
+          baseWhere,
+          {
+            OR: [
+              { created_at: { gt: d } },
+              {
+                AND: [{ created_at: { equals: d } }, { id: { gt: cursorDecoded.id } }],
+              },
+            ],
+          },
+        ],
+      };
+    } else if ("ca" in cursorDecoded && cursorDecoded.ca) {
+      const d = new Date(cursorDecoded.ca);
+      where = {
+        AND: [
+          baseWhere,
+          {
+            OR: [
+              { created_at: { lt: d } },
+              {
+                AND: [{ created_at: { equals: d } }, { id: { lt: cursorDecoded.id } }],
+              },
+            ],
+          },
+        ],
+      };
+    } else {
+      where = baseWhere;
+      skip = skipLegacy;
+      take = limit + 1;
+    }
   } else if (useKeyset && !cursorDecoded && skipLegacy === 0) {
     where = baseWhere;
   } else if (useOffsetFallback) {
@@ -1097,14 +1165,8 @@ async function runWithFallback(params: ProductQuery, access?: AccessContext): Pr
     const pageItems = collected.slice(0, limit);
     const last = pageItems[pageItems.length - 1];
     const nextCursor =
-      result.usedKeyset &&
-      result.strictHasMore &&
-      last &&
-      isListingsKeysetSortOrder(params.sort, params.q)
-        ? encodeListingsCursor(
-            (last as { created_at?: Date | string }).created_at as Date,
-            String((last as { id?: string }).id ?? "")
-          )
+      result.usedKeyset && result.strictHasMore && last
+        ? getNextListingsCursor(pageItems, result.strictHasMore, params.sort, params.q)
         : null;
     return {
       items: pageItems,
@@ -1257,12 +1319,7 @@ async function runWithFallback(params: ProductQuery, access?: AccessContext): Pr
   const last = pageItems[pageItems.length - 1];
   const hasMore = collected.length === limit;
   const nextCursor =
-    hasMore && last && isListingsKeysetSortOrder(params.sort, params.q)
-      ? encodeListingsCursor(
-          (last as { created_at?: Date | string }).created_at as Date,
-          String((last as { id?: string }).id ?? "")
-        )
-      : null;
+    hasMore && last ? getNextListingsCursor(pageItems, hasMore, params.sort, params.q) : null;
 
   return {
     items: pageItems,
@@ -1274,7 +1331,7 @@ async function runWithFallback(params: ProductQuery, access?: AccessContext): Pr
 }
 
 /** True when query has no filters – safe to cache with unstable_cache for server/edge. */
-function isCacheableDefaultQuery(query: ProductQuery, access?: AccessContext): boolean {
+export function isRoListingsBroadDefaultFeed(query: ProductQuery, access?: AccessContext): boolean {
   if (access != null) return false;
   const q = (query.q ?? "").trim();
   const hasFilters =
@@ -1454,15 +1511,36 @@ function canUseFastSupabasePath(query: ProductQuery): boolean {
     (sort === "" || sort === "newest" || sort === "date_desc");
 }
 
-function getNextListingsCursor(items: Record<string, unknown>[], hasMore: boolean): string | null {
+function getNextListingsCursor(
+  items: Record<string, unknown>[],
+  hasMore: boolean,
+  sort?: string,
+  q?: string,
+): string | null {
   if (!hasMore || items.length === 0) return null;
+  if (!isListingsKeysetSortOrder(sort, q)) return null;
   const last = items[items.length - 1];
-  const createdAt = last.created_at;
-  const id = last.id;
-  if ((typeof createdAt !== "string" && !(createdAt instanceof Date)) || typeof id !== "string") {
-    return null;
+  const id = String(last.id ?? "");
+  if (!id) return null;
+  const s = (sort ?? "").toLowerCase();
+  if (s === "price_asc" || s === "pricelow") {
+    const pr = Number(last.starting_price_ron ?? last.starting_price ?? 0);
+    return encodeListingsKeysetCursor({ k: "pricelow", id, pr: Number.isFinite(pr) ? pr : 0 });
   }
-  return encodeListingsCursor(createdAt, id);
+  if (s === "price_desc" || s === "pricehigh") {
+    const pr = Number(last.starting_price_ron ?? last.starting_price ?? 0);
+    return encodeListingsKeysetCursor({ k: "pricehigh", id, pr: Number.isFinite(pr) ? pr : 0 });
+  }
+  if (s === "date_asc" || s === "oldest") {
+    const createdAt = last.created_at;
+    if ((typeof createdAt !== "string" && !(createdAt instanceof Date))) return null;
+    const ca = typeof createdAt === "string" ? createdAt : createdAt.toISOString();
+    return encodeListingsKeysetCursor({ k: "oldest", id, ca });
+  }
+  const createdAt = last.created_at;
+  if ((typeof createdAt !== "string" && !(createdAt instanceof Date))) return null;
+  const ca = typeof createdAt === "string" ? createdAt : createdAt.toISOString();
+  return encodeListingsKeysetCursor({ k: "newest", id, ca });
 }
 
 function queryTargetsExecutari(query: ProductQuery): boolean {
@@ -1564,7 +1642,7 @@ export function canUseEnterpriseSupabasePath(query: ProductQuery): boolean {
   );
 }
 
-function buildEnterpriseRpcArgs(
+export function buildEnterpriseRpcArgs(
   query: ProductQuery,
   access: AccessContext | undefined,
   includeExecutariCrosslist: boolean,
@@ -1696,7 +1774,12 @@ async function getRoListingsEnterpriseSupabase(
     return {
       items,
       nextFrom: from + items.length,
-      nextCursor: getNextListingsCursor(items, hasMore && isListingsKeysetSortOrder(query.sort, query.q)),
+      nextCursor: getNextListingsCursor(
+        items,
+        hasMore && isEnterpriseListingsKeysetSort(query.sort, query.q),
+        query.sort,
+        query.q,
+      ),
       hasMore,
     };
   };
@@ -1766,6 +1849,57 @@ export async function countProductsViaEnterpriseRpc(
   return null;
 }
 
+export type RoListingsTotalKind = "exact" | "estimate" | "capped";
+
+/** Capped / reltuples total — same RPC args as exact count. */
+export async function countProductsEnterpriseEstimateMeta(
+  query: ProductQuery,
+  access?: AccessContext,
+): Promise<{ total: number; totalKind: RoListingsTotalKind } | null> {
+  if (!USE_PRODUCTS_CHANNEL || !supabaseAdmin) return null;
+  if (!canUseEnterpriseSupabasePath(query)) return null;
+
+  const channel: RoChannel = (query.channel ?? "ro") as RoChannel;
+  const scope = query.scope ?? "all";
+  if (scope === "executari" && !access?.hasExecutariAccess) {
+    return { total: 0, totalKind: "exact" };
+  }
+  if (channel === "executari_insolventa" && !access?.hasExecutariAccess) {
+    return { total: 0, totalKind: "exact" };
+  }
+
+  const requestedLimit = query.limit ?? 30;
+  const limit = Math.min(Math.max(1, requestedLimit), 100);
+  const includeExecutariCrosslist =
+    query.includeExecutariCrosslist === true || queryTargetsExecutari(query)
+      ? await getRoExecutariCrosslistEnabled(true)
+      : false;
+  const args = buildEnterpriseRpcArgs(query, access, includeExecutariCrosslist, limit);
+
+  const { data, error } = await runPostgrestQuery<unknown>(
+    (signal) => supabaseAdmin!.rpc("count_ro_listings_enterprise_estimate", args).abortSignal(signal),
+    { timeoutMs: 6500, maxRetries: 0, retryDelayMs: 250 },
+  );
+
+  if (error) {
+    if (process.env.DEBUG_LISTINGS_COUNT === "1") {
+      // eslint-disable-next-line no-console
+      console.warn("[listings-count] count_ro_listings_enterprise_estimate:", error.message);
+    }
+    return null;
+  }
+
+  const row = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null | undefined;
+  if (!row || typeof row !== "object") return null;
+  const totalRaw = row.total ?? (row as { TOTAL?: unknown }).TOTAL;
+  const total = typeof totalRaw === "number" ? totalRaw : Number(totalRaw);
+  const kindRaw = String(row.total_kind ?? (row as { totalKind?: unknown }).totalKind ?? "exact").toLowerCase();
+  const totalKind: RoListingsTotalKind =
+    kindRaw === "estimate" ? "estimate" : kindRaw === "capped" ? "capped" : "exact";
+  if (!Number.isFinite(total)) return null;
+  return { total, totalKind };
+}
+
 async function getRoListingsFastSupabase(
   query: ProductQuery,
   access?: AccessContext,
@@ -1782,20 +1916,25 @@ async function getRoListingsFastSupabase(
   const subcategories = getFastSubcategories(query);
   const includeExecutariCrosslist = query.includeExecutariCrosslist === true || queryTargetsExecutari(query);
   if (USE_PRODUCTS_CHANNEL && scope === "executari" && !access?.hasExecutariAccess) {
-    return { items: [], nextFrom: 0, hasMore: false };
+    return { items: [], nextFrom: 0, nextCursor: null, hasMore: false };
   }
   if (USE_PRODUCTS_CHANNEL && channel === "executari_insolventa" && !access?.hasExecutariAccess) {
-    return { items: [], nextFrom: 0, hasMore: false };
+    return { items: [], nextFrom: 0, nextCursor: null, hasMore: false };
   }
 
   const from = Math.max(0, query.from ?? 0);
   const requestedLimit = query.limit ?? 30;
   const limit = Math.min(Math.max(1, requestedLimit), 100);
+  const decodedRaw = query.listingsCursor ? decodeListingsCursor(query.listingsCursor) : null;
   const cursorDecoded =
-    query.listingsCursor && isListingsKeysetSortOrder(query.sort, query.q)
-      ? decodeListingsCursor(query.listingsCursor)
+    decodedRaw &&
+    isEnterpriseListingsKeysetSort(query.sort, query.q) &&
+    listingsCursorMatchesSort(decodedRaw, query.sort, query.q)
+      ? decodedRaw
       : null;
-  const cursorCreatedAt = cursorDecoded ? new Date(cursorDecoded.ca).toISOString() : null;
+  const cursorCa =
+    cursorDecoded && "ca" in cursorDecoded && cursorDecoded.ca ? cursorDecoded.ca : null;
+  const cursorCreatedAt = cursorCa ? new Date(cursorCa).toISOString() : null;
   const pageFrom = cursorDecoded ? 0 : from;
   const statusFilter = Array.isArray(query.status)
     ? query.status
@@ -1877,7 +2016,12 @@ async function getRoListingsFastSupabase(
   return {
     items,
     nextFrom: from + items.length,
-    nextCursor: getNextListingsCursor(items, hasMore && isListingsKeysetSortOrder(query.sort, query.q)),
+    nextCursor: getNextListingsCursor(
+      items,
+      hasMore && isEnterpriseListingsKeysetSort(query.sort, query.q),
+      query.sort,
+      query.q,
+    ),
     hasMore,
   };
 }
@@ -2002,7 +2146,7 @@ export async function getRoListings(query: ProductQuery, access?: AccessContext)
       throw error;
     }
   }
-  if (isCacheableDefaultQuery(resolved, access)) {
+  if (isRoListingsBroadDefaultFeed(resolved, access)) {
     const from = Math.max(0, resolved.from ?? 0);
     const limit = Math.min(100, Math.max(1, resolved.limit ?? 30));
     const cacheKey = `ro-listings:${from}:${limit}`;

@@ -112,6 +112,7 @@ export function ProgressiveImage({
     unoptimized: true as const,
     sizes: resolvedSizes,
     priority,
+    fetchPriority: priority ? ("high" as const) : undefined,
     /** Aliniază cu comportamentul implicit next/image (priority → eager + fetchPriority high). */
     loading: (priority ? undefined : loading ?? "lazy") as "lazy" | undefined,
     suppressHydrationWarning: true as const,

@@ -1,24 +1,40 @@
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_cache } from "next/cache";
+import { Redis } from "@upstash/redis";
 import { requireAdmin } from "@/lib/adminAuth";
 import { supabaseAdmin } from "@/lib/supabase";
 import { resolveAccess } from "@/lib/server/access/resolveAccess";
 import { getRoListings } from "@/lib/server/products/listingsRepo";
-import { countProducts } from "@/lib/server/products/listingsCountRepo";
+import { countProductsWithEstimateMeta } from "@/lib/server/products/listingsCountRepo";
+import type { RoListingsTotalKind } from "@/lib/server/products/listingsCountRepo";
 import { normalizeRoListingsSearchParams } from "@/lib/ro/normalizedListingsQuery";
 import { RO_LISTINGS_PAGE_SIZE_DESKTOP } from "@/lib/ro/roListingsPagination";
 
-export const dynamic = 'force-dynamic';
-export const fetchCache = 'force-no-store';
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
+/** Node runtime: hot path uses optional Upstash Redis (same env as other features). Not Edge — listings stack uses Node-only deps. */
+export const runtime = "nodejs";
 
 const USE_PRISMA = process.env.USE_PRISMA_LISTINGS === "true";
 
 const getCachedListings = unstable_cache(
   async (from: number, limit: number) => getRoListings({ from, limit }),
   ["ro-listings"],
-  { revalidate: 120, tags: ["ro-listings"] }
+  { revalidate: 120, tags: ["ro-listings"] },
 );
+
+const RO_LISTINGS_KV_TTL_SEC = 30;
+const RO_LISTINGS_KV_PREFIX = "ro:listings:v1:";
+
+function getRoListingsRedis(): Redis | null {
+  try {
+    if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) return null;
+    return Redis.fromEnv();
+  } catch {
+    return null;
+  }
+}
 
 /** Auth/session cookie names that force no-store (no CDN cache). */
 const AUTH_COOKIE_PATTERNS = [
@@ -42,18 +58,19 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const fresh = searchParams.get("fresh") === "1";
-    const mode = searchParams.get("mode") === "instant"
-      ? "instant"
-      : searchParams.get("mode") === "background"
-        ? "background"
-        : null;
+    const mode =
+      searchParams.get("mode") === "instant"
+        ? "instant"
+        : searchParams.get("mode") === "background"
+          ? "background"
+          : null;
 
     if (fresh) {
       const auth = await requireAdmin(request);
       if (!auth.ok) return auth.response;
     }
 
-    const { query, hasFilters } = normalizeRoListingsSearchParams(searchParams);
+    const { query, hasFilters, cacheKey } = normalizeRoListingsSearchParams(searchParams);
     const access = await resolveAccess(request);
 
     if (process.env.DEBUG_LISTINGS === "1") {
@@ -75,13 +92,32 @@ export async function GET(request: NextRequest) {
       !hasFilters &&
       !query.listingsCursor &&
       query.channel !== "executari_insolventa";
+
+    const redis = getRoListingsRedis();
+    const redisKey =
+      redis && !fresh && !isAuthenticated && !hasFilters && !query.listingsCursor
+        ? `${RO_LISTINGS_KV_PREFIX}${cacheKey}`
+        : null;
+
+    if (redis && redisKey) {
+      try {
+        const hit = await redis.get<string>(redisKey);
+        if (hit) {
+          const parsed = JSON.parse(hit) as Record<string, unknown>;
+          const res = NextResponse.json(parsed);
+          res.headers.set("Cache-Control", "public, s-maxage=30, stale-while-revalidate=300");
+          res.headers.set("x-ro-listings-cache", "kv-hit");
+          return res;
+        }
+      } catch {
+        // ignore KV errors
+      }
+    }
+
     let result = useCache
       ? await getCachedListings(query.from ?? 0, query.limit ?? RO_LISTINGS_PAGE_SIZE_DESKTOP)
       : await getRoListings(query, access);
-    const shouldDeferExactTotal = mode === "instant" || mode === "background";
-    const totalPromise = shouldDeferExactTotal
-      ? Promise.resolve(undefined)
-      : countProducts(query, access).catch(() => undefined);
+    const shouldDeferTotal = mode === "instant" || mode === "background";
 
     // Avoid serving a transiently cached empty homepage feed after PostgREST hiccups.
     if (useCache && result.items.length === 0) {
@@ -90,13 +126,26 @@ export async function GET(request: NextRequest) {
         result = liveResult;
       }
     }
-    const total = shouldDeferExactTotal
-      ? undefined
-      : typeof result.totalMatched === "number"
-        ? result.totalMatched
-        : await totalPromise;
 
-    const response = NextResponse.json({
+    let total: number | undefined;
+    let totalKind: RoListingsTotalKind | undefined;
+    if (!shouldDeferTotal) {
+      if (typeof result.totalMatched === "number") {
+        total = result.totalMatched;
+        totalKind = "exact";
+      } else {
+        try {
+          const meta = await countProductsWithEstimateMeta(query, access);
+          total = meta.total;
+          totalKind = meta.totalKind;
+        } catch {
+          total = undefined;
+          totalKind = undefined;
+        }
+      }
+    }
+
+    const payload = {
       success: true,
       items: result.items,
       nextFrom: result.nextFrom,
@@ -108,16 +157,26 @@ export async function GET(request: NextRequest) {
         page: query.page ?? 1,
       },
       ...(result.meta ? { meta: result.meta } : {}),
-      ...(typeof total === "number" ? { total } : {}),
+      ...(typeof total === "number" ? { total, total_kind: totalKind } : {}),
       fresh,
       ...(mode ? { mode } : {}),
-    });
+    };
+
+    if (redis && redisKey) {
+      try {
+        await redis.set(redisKey, JSON.stringify(payload), { ex: RO_LISTINGS_KV_TTL_SEC });
+      } catch {
+        // ignore
+      }
+    }
+
+    const response = NextResponse.json(payload);
 
     response.headers.set(
       "Cache-Control",
       fresh || isAuthenticated
         ? "private, no-store, no-cache, must-revalidate"
-        : "public, s-maxage=30, stale-while-revalidate=300"
+        : "public, s-maxage=30, stale-while-revalidate=300",
     );
     return response;
   } catch (error: unknown) {
