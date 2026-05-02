@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "764815604505",
+    "project_id": "gobid-ce90a",
+    "storage_bucket": "gobid-ce90a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:764815604505:android:6a76c3d8a2bff0591c2388",
+        "android_client_info": {
+          "package_name": "ro.gobid.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyByrUvcCVV2XuMpZg6FJME6UC1iUKmyu1k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

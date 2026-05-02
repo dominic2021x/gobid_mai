@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">gobid.ro</string>
+    <string name="title_activity_main">gobid.ro</string>
+    <string name="package_name">ro.gobid.app</string>
+    <string name="custom_url_scheme">ro.gobid.app</string>
+</resources>

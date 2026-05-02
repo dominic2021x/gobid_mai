@@ -1,0 +1,56 @@
+  // Helper functions
+  const SKU_TOTAL_LENGTH = 10;
+  const SKU_PREFIX_LENGTH = 4;
+  const SKU_SUFFIX_LENGTH = SKU_TOTAL_LENGTH - SKU_PREFIX_LENGTH;
+  const SKU_CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const MAX_IMAGES = 20;
+  const FREE_IMAGES = 4;
+  const MAX_DOCUMENTS = 10;
+  const MAX_DOCUMENT_SIZE_MB = 10;
+
+  const roundTo = (value: number, decimals = 2) => {
+    return Math.round(value * Math.pow(10, decimals)) / Math.pow(10, decimals);
+  };
+
+  const sanitizeSkuInput = (value: string): string => {
+    const cleaned = value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return cleaned.slice(0, SKU_TOTAL_LENGTH);
+  };
+
+  const normalizeSubcategoryName = (value: string): string => {
+    return value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+  };
+
+  const generateSku = (subcategory: string, existingSkus: string[]): string => {
+    const normalized = normalizeSubcategoryName(subcategory);
+    if (!normalized) return '';
+
+    const prefix = (normalized + 'XXXX').slice(0, SKU_PREFIX_LENGTH);
+    for (let attempt = 0; attempt < 30; attempt++) {
+      let suffix = '';
+      for (let i = 0; i < SKU_SUFFIX_LENGTH; i++) {
+        const randomIndex = Math.floor(Math.random() * SKU_CHARSET.length);
+        suffix += SKU_CHARSET[randomIndex];
+      }
+
+      const candidate = `${prefix}${suffix}`;
+      if (!existingSkus.includes(candidate)) {
+        return candidate;
+      }
+    }
+
+    const fallback = `${prefix}${Date.now().toString(36).toUpperCase().replace(/[^A-Z0-9]/g, '')}`;
+    return fallback.slice(0, SKU_TOTAL_LENGTH).padEnd(SKU_TOTAL_LENGTH, '0');
+  };
+
+  // Categories and subcategories are already defined above (around line 954)
+  // No need to redefine them here
+
+  const counties = [
+    'Alba', 'Arad', 'Argeș', 'Bacău', 'Bihor', 'Bistrița-Năsăud', 'Botoșani',
+    'Brașov', 'Brăila', 'Buzău', 'Caraș-Severin', 'Călărași', 'Cluj', 'Constanța',
+    'Covasna', 'Dâmbovița', 'Dolj', 'Galați', 'Giurgiu', 'Gorj', 'Harghita',
+    'Hunedoara', 'Ialomița', 'Iași', 'Ilfov', 'Maramureș', 'Mehedinți', 'Mureș',
+    'Neamț', 'Olt', 'Prahova', 'Sălaj', 'Satu Mare', 'Sibiu', 'Suceava',
+    'Teleorman', 'Timiș', 'Tulcea', 'Vâlcea', 'Vaslui', 'Vrancea', 'București'
+  ];

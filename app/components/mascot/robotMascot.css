@@ -1,0 +1,42 @@
+/* Robot mascot – 12-frame spritesheet, CSS-only loop, no timers */
+
+.mascot {
+  display: block;
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  background-size: 1200% 100%; /* 12 frames horizontal */
+}
+
+.mascot--idle {
+  animation: mascot-idle 1.2s steps(12) infinite;
+}
+
+.mascot--kick {
+  animation: mascot-kick 0.6s steps(12) forwards;
+}
+
+@keyframes mascot-idle {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: -1100% 0;
+  }
+}
+
+@keyframes mascot-kick {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: -1100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mascot.mascot--idle,
+  .mascot.mascot--kick {
+    animation: none;
+    background-position: 0 0;
+  }
+}

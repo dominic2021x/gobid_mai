@@ -1,0 +1,51 @@
+[
+  {
+    "id": "1",
+    "title": "Telefon Samsung Galaxy S23",
+    "description": "Smartphone nou, 128GB, dual SIM, ecran AMOLED 6.1\", procesor Snapdragon 8 Gen 2, camera 50MP, baterie 3900mAh",
+    "category": "Electronice",
+    "price": 2500,
+    "image": "https://example.com/samsung-s23.jpg"
+  },
+  {
+    "id": "2",
+    "title": "iPhone 14 Pro",
+    "description": "Telefon Apple nou, 256GB, ecran Super Retina XDR 6.1\", procesor A16 Bionic, camera triplă 48MP, baterie durată lungă",
+    "category": "Electronice",
+    "price": 4500,
+    "image": "https://example.com/iphone-14-pro.jpg"
+  },
+  {
+    "id": "3",
+    "title": "Laptop Dell XPS 13",
+    "description": "Laptop ultrabook, Intel i7, 16GB RAM, SSD 512GB, ecran 13.3\" Full HD, Windows 11",
+    "category": "Electronice",
+    "price": 6000,
+    "image": "https://example.com/dell-xps13.jpg"
+  },
+  {
+    "id": "4",
+    "title": "Bijuterie Colier Aur 18K",
+    "description": "Colier elegant din aur 18 carate, lungime 45cm, design clasic, perfect pentru ocazii speciale",
+    "category": "Bijuterii",
+    "price": 3000,
+    "image": "https://example.com/colier-aur.jpg"
+  }
+]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

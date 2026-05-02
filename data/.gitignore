@@ -1,0 +1,23 @@
+# Ignoră fișierele JSON cu date (păstrează doar exemple)
+products.json
+pages.json
+
+# Păstrează exemplele
+!*.example.json
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

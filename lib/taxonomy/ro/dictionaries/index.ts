@@ -1,0 +1,8 @@
+export { FUEL_SYNONYMS } from "./fuel";
+export { BODY_TYPE_SYNONYMS } from "./bodyType";
+export {
+  FASHION_DEPARTMENT_SYNONYMS,
+  FASHION_APPAREL_SYNONYMS,
+  FASHION_FOOTWEAR_SYNONYMS,
+  FASHION_ACCESSORY_SYNONYMS,
+} from "./fashion";

@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+
+# Private/internal routes
+Disallow: /admin/
+Disallow: /dashboard/
+Disallow: /api/
+Disallow: /auth/

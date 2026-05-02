@@ -1,0 +1,64 @@
+PODS:
+  - Capacitor (6.2.1):
+    - CapacitorCordova
+  - CapacitorApp (6.0.3):
+    - Capacitor
+  - CapacitorCamera (6.1.3):
+    - Capacitor
+  - CapacitorCordova (6.2.1)
+  - CapacitorDevice (6.0.3):
+    - Capacitor
+  - CapacitorLocalNotifications (6.1.3):
+    - Capacitor
+  - CapacitorPushNotifications (6.0.5):
+    - Capacitor
+  - CapacitorStatusBar (6.0.3):
+    - Capacitor
+  - CapawesomeCapacitorBadge (6.0.0):
+    - Capacitor
+
+DEPENDENCIES:
+  - "Capacitor (from `../../../node_modules/@capacitor/ios`)"
+  - "CapacitorApp (from `../../../node_modules/@capacitor/app`)"
+  - "CapacitorCamera (from `../../../node_modules/@capacitor/camera`)"
+  - "CapacitorCordova (from `../../../node_modules/@capacitor/ios`)"
+  - "CapacitorDevice (from `../../../node_modules/@capacitor/device`)"
+  - "CapacitorLocalNotifications (from `../../../node_modules/@capacitor/local-notifications`)"
+  - "CapacitorPushNotifications (from `../../../node_modules/@capacitor/push-notifications`)"
+  - "CapacitorStatusBar (from `../../../node_modules/@capacitor/status-bar`)"
+  - "CapawesomeCapacitorBadge (from `../../../node_modules/@capawesome/capacitor-badge`)"
+
+EXTERNAL SOURCES:
+  Capacitor:
+    :path: "../../../node_modules/@capacitor/ios"
+  CapacitorApp:
+    :path: "../../../node_modules/@capacitor/app"
+  CapacitorCamera:
+    :path: "../../../node_modules/@capacitor/camera"
+  CapacitorCordova:
+    :path: "../../../node_modules/@capacitor/ios"
+  CapacitorDevice:
+    :path: "../../../node_modules/@capacitor/device"
+  CapacitorLocalNotifications:
+    :path: "../../../node_modules/@capacitor/local-notifications"
+  CapacitorPushNotifications:
+    :path: "../../../node_modules/@capacitor/push-notifications"
+  CapacitorStatusBar:
+    :path: "../../../node_modules/@capacitor/status-bar"
+  CapawesomeCapacitorBadge:
+    :path: "../../../node_modules/@capawesome/capacitor-badge"
+
+SPEC CHECKSUMS:
+  Capacitor: c95400d761e376be9da6be5a05f226c0e865cebf
+  CapacitorApp: a19ccb4f5f32d2534be5c6f524d5a9b614a1e8a7
+  CapacitorCamera: 5ba135b0cb55a788758139fa2404d726bf60f0f3
+  CapacitorCordova: 8d93e14982f440181be7304aa9559ca631d77fff
+  CapacitorDevice: 3ec44d26b51986119a1987fad1253609d5aacb68
+  CapacitorLocalNotifications: 801867e687c42dd2b33c1e22e08f48e6738d2f72
+  CapacitorPushNotifications: 35abece14371c57172e8321c9ccc8b6fa35fabfe
+  CapacitorStatusBar: 149cde8f1328ec3aa6cbdd872a55137ae3f98b16
+  CapawesomeCapacitorBadge: 4df4bd752f7fcf0cedfc0748bca1cbe8a0e29794
+
+PODFILE CHECKSUM: 6a71cf6368ab7618c7398bda4cf040c86b75d3b3
+
+COCOAPODS: 1.16.2

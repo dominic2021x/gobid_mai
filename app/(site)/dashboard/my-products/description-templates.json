@@ -1,0 +1,1072 @@
+{
+  "Electronice & Tehnologie": {
+    "Telefoane Mobile": {
+      "requiredFields": ["marca", "model", "capacitate", "culoare", "stare", "baterie", "deblocat", "accesorii"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, {capacitate} – {stare}\n\nTelefonul a fost folosit cu grijă și nu prezintă defecte. Ecranul este intact, fără zgârieturi, iar toate funcțiile funcționează corect.\n\nBateria are {baterie}% sănătate și oferă o autonomie {baterieStatus}.\n\nTelefonul este {deblocat} și poate fi folosit în orice rețea.\n\nContul iCloud este {iCloud}, pregătit pentru noul utilizator.\n\nCuloare: {culoare}.\n\nSe vinde împreună cu {accesorii}.\n\nPredare personală sau trimitere prin curier."
+        },
+        {
+          "pattern": "{marca} {model} {capacitate}, culoare {culoare}, în stare {stare}.\n\nDispozitivul funcționează perfect, ecranul este fără zgârieturi și toate componentele sunt în regulă.\n\nSănătatea bateriei: {baterie}%.\n\nTelefonul este {deblocat}, {iCloud}.\n\nInclus în vânzare: {accesorii}.\n\nLivrare: personală sau curierat."
+        },
+        {
+          "pattern": "Vând {marca} {model} {capacitate}, {culoare}, stare {stare}.\n\nTelefonul este în perfectă stare de funcționare, fără defecte vizibile sau funcționale.\n\nBateria: {baterie}% capacitate.\n\nDispozitiv {deblocat}, {iCloud}.\n\nCuloare: {culoare}.\n\nAccesorii incluse: {accesorii}.\n\nPredare: personală sau expediere."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["iphone", "samsung", "xiaomi", "huawei", "oppo", "oneplus", "realme", "google pixel", "nokia"],
+        "model": ["\\d+", "pro", "max", "plus", "mini", "ultra", "lite"],
+        "capacitate": ["\\d+\\s*gb", "\\d+\\s*gb", "128", "256", "512", "64"],
+        "culoare": ["negru", "alb", "albă", "gri", "auriu", "aur", "albastru", "albastră", "roz", "verde", "mov"],
+        "stare": ["excelentă", "foarte bună", "bună", "perfectă", "ca nou", "folosit", "uzat"],
+        "baterie": ["\\d+%", "\\d+\\s*%", "\\d+\\s*procent"],
+        "deblocat": ["deblocat", "blocat", "liber", "în orice rețea"],
+        "iCloud": ["șters", "ștearsă", "activ", "dezactivat", "pregătit"],
+        "accesorii": ["cutie", "cablu", "încărcător", "carcasă", "folie", "husă"]
+      }
+    },
+    "Laptopuri și PC-uri": {
+      "requiredFields": ["marca", "model", "procesor", "ram", "stocare", "stare", "accesorii"],
+      "templates": [
+        {
+          "pattern": "{marca} {model} – {stare}\n\nLaptopul este în stare {stare}, funcționează perfect. Procesor {procesor}, {ram} RAM, {stocare} stocare.\n\nToate componentele sunt funcționale, ecranul este intact.\n\nInclus: {accesorii}.\n\nPredare personală sau curierat."
+        },
+        {
+          "pattern": "Vând {marca} {model}, procesor {procesor}, {ram} RAM, {stocare}.\n\nDispozitiv în stare {stare}, fără defecte.\n\nAccesorii: {accesorii}.\n\nLivrare: personală sau expediere."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["dell", "hp", "lenovo", "asus", "acer", "apple", "macbook", "msi", "razer"],
+        "model": ["[a-z0-9\\-]+"],
+        "procesor": ["intel", "amd", "i3", "i5", "i7", "i9", "ryzen", "m1", "m2", "m3"],
+        "ram": ["\\d+\\s*gb", "\\d+\\s*gb ram"],
+        "stocare": ["\\d+\\s*gb", "\\d+\\s*tb", "ssd", "hdd"],
+        "stare": ["excelentă", "foarte bună", "bună", "perfectă"],
+        "accesorii": ["încărcător", "mouse", "ghiozdan", "cutie"]
+      }
+    },
+    "Tablete": {
+      "requiredFields": ["marca", "model", "capacitate", "culoare", "stare", "accesorii"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, {capacitate} – {stare}\n\nTableta este în stare {stare}, funcționează perfect. Ecranul este intact, fără zgârieturi.\n\nCuloare: {culoare}.\n\nInclus: {accesorii}.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["ipad", "samsung", "xiaomi", "huawei"],
+        "model": ["\\d+", "pro", "air", "mini"],
+        "capacitate": ["\\d+\\s*gb"],
+        "culoare": ["negru", "alb", "gri", "auriu"],
+        "stare": ["excelentă", "foarte bună", "bună"],
+        "accesorii": ["cutie", "cablu", "încărcător"]
+      }
+    },
+    "TV & Audio": {
+      "requiredFields": ["marca", "model", "dimensiune", "stare", "dotari"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, {dimensiune} – {stare}\n\nTelevizorul este în stare {stare}, funcționează perfect.\n\nDotări: {dotari}.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["samsung", "lg", "sony", "philips", "panasonic"],
+        "model": ["[a-z0-9\\-]+"],
+        "dimensiune": ["\\d+\\s*inch", "\\d+\\s*\"", "\\d+\\s*cm"],
+        "stare": ["excelentă", "foarte bună", "bună"],
+        "dotari": ["smart", "4k", "hdr", "wifi"]
+      }
+    },
+    "Console & Jocuri": {
+      "requiredFields": ["marca", "model", "stare", "accesorii"],
+      "templates": [
+        {
+          "pattern": "{marca} {model} – {stare}\n\nConsole în stare {stare}, funcționează perfect.\n\nInclus: {accesorii}.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["playstation", "xbox", "nintendo"],
+        "model": ["\\d+", "series", "switch"],
+        "stare": ["excelentă", "foarte bună", "bună"],
+        "accesorii": ["controller", "jocuri", "cablu"]
+      }
+    },
+    "Drone & Gadgeturi Smart": {
+      "requiredFields": ["marca", "model", "stare", "accesorii"],
+      "templates": [
+        {
+          "pattern": "{marca} {model} – {stare}\n\nDispozitiv în stare {stare}, funcționează perfect.\n\nInclus: {accesorii}.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["dji", "parrot", "xiaomi"],
+        "model": ["[a-z0-9\\-]+"],
+        "stare": ["excelentă", "foarte bună", "bună"],
+        "accesorii": ["baterii", "controller", "cutie"]
+      }
+    },
+    "Echipamente Foto/Video": {
+      "requiredFields": ["marca", "model", "stare", "accesorii"],
+      "templates": [
+        {
+          "pattern": "{marca} {model} – {stare}\n\nEchipament în stare {stare}, funcționează perfect.\n\nInclus: {accesorii}.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["canon", "nikon", "sony", "fujifilm"],
+        "model": ["[a-z0-9\\-]+"],
+        "stare": ["excelentă", "foarte bună", "bună"],
+        "accesorii": ["objectiv", "baterii", "cutie"]
+      }
+    }
+  },
+  "Autovehicule": {
+    "Autoturisme": {
+      "requiredFields": ["marca", "model", "an", "kilometraj", "combustibil", "cutie", "stare", "dotari"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, an {an}, {kilometraj} km – {stare}\n\nMașina este în stare {stare}, întreținută regulat. Motor {combustibil}, cutie {cutie}.\n\nDotări: {dotari}.\n\nFără accidente, istoric complet.\n\nPredare personală."
+        },
+        {
+          "pattern": "Vând {marca} {model} {an}, {kilometraj} km.\n\nVehicul {stare}, {combustibil}, {cutie}.\n\nDotări: {dotari}.\n\nFără evenimente, documente în regulă.\n\nLivrare: personală."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["bmw", "audi", "mercedes", "volkswagen", "skoda", "dacia", "ford", "opel", "renault", "peugeot"],
+        "model": ["[a-z0-9\\-]+"],
+        "an": ["\\d{4}", "anul \\d{4}"],
+        "kilometraj": ["\\d+\\s*km", "\\d+\\s*mii"],
+        "combustibil": ["benzina", "diesel", "hibrid", "electric", "gpl"],
+        "cutie": ["manuală", "automată", "cvt"],
+        "stare": ["excelentă", "foarte bună", "bună"],
+        "dotari": ["climatizare", "navigație", "senzori", "camera"]
+      }
+    },
+    "SUV / 4x4": {
+      "requiredFields": ["marca", "model", "an", "kilometraj", "combustibil", "cutie", "stare", "dotari"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, an {an}, {kilometraj} km – {stare}\n\nSUV în stare {stare}, {combustibil}, {cutie}.\n\nDotări: {dotari}.\n\nFără accidente, istoric complet.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["land rover", "jeep", "bmw", "audi", "mercedes"],
+        "model": ["[a-z0-9\\-]+"],
+        "an": ["\\d{4}"],
+        "kilometraj": ["\\d+\\s*km"],
+        "combustibil": ["benzina", "diesel", "hibrid", "electric"],
+        "cutie": ["manuală", "automată"],
+        "stare": ["excelentă", "foarte bună", "bună"],
+        "dotari": ["climatizare", "navigație", "senzori"]
+      }
+    },
+    "Motociclete și Scutere": {
+      "requiredFields": ["marca", "model", "an", "kilometraj", "cilindree", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, an {an}, {kilometraj} km – {stare}\n\nMotocicletă în stare {stare}, {cilindree}.\n\nFără accidente, întreținută regulat.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["yamaha", "honda", "kawasaki", "harley", "ducati"],
+        "model": ["[a-z0-9\\-]+"],
+        "an": ["\\d{4}"],
+        "kilometraj": ["\\d+\\s*km"],
+        "cilindree": ["\\d+\\s*cc", "\\d+\\s*cmc"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Camioane": {
+      "requiredFields": ["marca", "model", "an", "kilometraj", "combustibil", "tonaj", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, an {an}, {kilometraj} km – {stare}\n\nCamion {tonaj}, {combustibil}.\n\nÎn stare {stare}, întreținut regulat.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["mercedes", "volvo", "scania", "man", "iveco"],
+        "model": ["[a-z0-9\\-]+"],
+        "an": ["\\d{4}"],
+        "kilometraj": ["\\d+\\s*km"],
+        "combustibil": ["diesel"],
+        "tonaj": ["\\d+\\s*tona", "\\d+\\s*t"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Vehicule Electrice": {
+      "requiredFields": ["marca", "model", "an", "kilometraj", "autonomie", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, an {an}, {kilometraj} km – {stare}\n\nVehicul electric în stare {stare}.\n\nAutonomie: {autonomie} km.\n\nFără accidente, întreținut regulat.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["tesla", "bmw", "audi", "mercedes"],
+        "model": ["[a-z0-9\\-]+"],
+        "an": ["\\d{4}"],
+        "kilometraj": ["\\d+\\s*km"],
+        "autonomie": ["\\d+\\s*km"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Piese Auto și Accesorii": {
+      "requiredFields": ["marca", "model", "tip", "stare", "compatibilitate"],
+      "templates": [
+        {
+          "pattern": "Piesă auto {marca} {model}, tip {tip} – {stare}\n\nCompatibil cu: {compatibilitate}.\n\nÎn stare {stare}, funcțională.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["bmw", "audi", "mercedes", "volkswagen"],
+        "model": ["[a-z0-9\\-]+"],
+        "tip": ["cutie", "motor", "suspensie", "frana"],
+        "stare": ["nouă", "folosită", "refabricată"],
+        "compatibilitate": ["[a-z0-9\\-]+"]
+      }
+    }
+  },
+  "Imobiliare": {
+    "Apartamente": {
+      "requiredFields": ["camere", "suprafata", "etaj", "an", "stare", "dotari"],
+      "templates": [
+        {
+          "pattern": "Apartament {camere}, {suprafata} mp, etaj {etaj}, an {an} – {stare}\n\nImobilul este în stare {stare}, {dotari}.\n\nLocație excelentă, acces ușor.\n\nVizionări: la programare.\n\nPredare: acte în regulă."
+        },
+        {
+          "pattern": "Vând apartament {camere}, {suprafata} mp, etaj {etaj}.\n\nConstruit în {an}, stare {stare}.\n\nDotări: {dotari}.\n\nVizionări: la programare.\n\nPredare: acte în regulă."
+        }
+      ],
+      "fieldExtractors": {
+        "camere": ["\\d+\\s*camere", "garsonieră", "2 camere", "3 camere"],
+        "suprafata": ["\\d+\\s*mp", "\\d+\\s*m²"],
+        "etaj": ["\\d+", "parter", "ultimul etaj"],
+        "an": ["\\d{4}"],
+        "stare": ["excelentă", "foarte bună", "necesită renovare"],
+        "dotari": ["balcon", "parcare", "garaj", "lift", "centrală"]
+      }
+    },
+    "Case și Vile": {
+      "requiredFields": ["camere", "suprafata", "teren", "an", "stare", "dotari"],
+      "templates": [
+        {
+          "pattern": "Casă {camere}, {suprafata} mp, teren {teren} mp, an {an} – {stare}\n\nProprietate în stare {stare}, {dotari}.\n\nLocație excelentă.\n\nVizionări: la programare.\n\nPredare: acte în regulă."
+        }
+      ],
+      "fieldExtractors": {
+        "camere": ["\\d+\\s*camere"],
+        "suprafata": ["\\d+\\s*mp"],
+        "teren": ["\\d+\\s*mp"],
+        "an": ["\\d{4}"],
+        "stare": ["excelentă", "foarte bună", "necesită renovare"],
+        "dotari": ["garaj", "gradina", "piscina", "centrală"]
+      }
+    },
+    "Terenuri Intravilane": {
+      "requiredFields": ["suprafata", "categoria", "stare", "localizare"],
+      "templates": [
+        {
+          "pattern": "Teren intravilan {suprafata} mp, categorie {categoria} – {stare}\n\nLocație: {localizare}.\n\nActe în regulă.\n\nVizionări: la programare."
+        }
+      ],
+      "fieldExtractors": {
+        "suprafata": ["\\d+\\s*mp"],
+        "categoria": ["intravilan", "extravilan"],
+        "stare": ["liber", "construit"],
+        "localizare": ["[a-zăâîșț]+"]
+      }
+    },
+    "Terenuri Agricole": {
+      "requiredFields": ["suprafata", "categoria", "stare"],
+      "templates": [
+        {
+          "pattern": "Teren agricol {suprafata} mp, categorie {categoria}.\n\nStare: {stare}.\n\nActe în regulă.\n\nVizionări: la programare."
+        }
+      ],
+      "fieldExtractors": {
+        "suprafata": ["\\d+\\s*mp", "\\d+\\s*ha"],
+        "categoria": ["arabil", "pășune", "livadă"],
+        "stare": ["cultivat", "necultivat"]
+      }
+    },
+    "Spații Comerciale": {
+      "requiredFields": ["suprafata", "etaj", "an", "stare", "dotari"],
+      "templates": [
+        {
+          "pattern": "Spațiu comercial {suprafata} mp, etaj {etaj}, an {an} – {stare}\n\nDotări: {dotari}.\n\nLocație excelentă pentru afacere.\n\nVizionări: la programare."
+        }
+      ],
+      "fieldExtractors": {
+        "suprafata": ["\\d+\\s*mp"],
+        "etaj": ["\\d+", "parter"],
+        "an": ["\\d{4}"],
+        "stare": ["excelentă", "foarte bună"],
+        "dotari": ["climatizare", "lift", "parcare"]
+      }
+    },
+    "Hale Industriale": {
+      "requiredFields": ["suprafata", "inaltime", "an", "stare", "dotari"],
+      "templates": [
+        {
+          "pattern": "Hală industrială {suprafata} mp, înălțime {inaltime} m, an {an} – {stare}\n\nDotări: {dotari}.\n\nIdeală pentru producție sau depozitare.\n\nVizionări: la programare."
+        }
+      ],
+      "fieldExtractors": {
+        "suprafata": ["\\d+\\s*mp"],
+        "inaltime": ["\\d+\\s*m"],
+        "an": ["\\d{4}"],
+        "stare": ["excelentă", "foarte bună"],
+        "dotari": ["drum", "curent", "apa"]
+      }
+    },
+    "Proprietăți Turistice": {
+      "requiredFields": ["camere", "suprafata", "tip", "stare", "dotari"],
+      "templates": [
+        {
+          "pattern": "Proprietate turistică {tip}, {camere}, {suprafata} mp – {stare}\n\nDotări: {dotari}.\n\nLocație turistică excelentă.\n\nVizionări: la programare."
+        }
+      ],
+      "fieldExtractors": {
+        "camere": ["\\d+\\s*camere"],
+        "suprafata": ["\\d+\\s*mp"],
+        "tip": ["pensiune", "vila", "casa"],
+        "stare": ["excelentă", "foarte bună"],
+        "dotari": ["piscina", "restaurant", "parcare"]
+      }
+    }
+  },
+  "Utilaje & Echipamente": {
+    "Utilaje Construcții": {
+      "requiredFields": ["marca", "model", "an", "ore", "stare", "dotari"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, an {an}, {ore} ore – {stare}\n\nUtilaj în stare {stare}, întreținut regulat.\n\nDotări: {dotari}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["caterpillar", "komatsu", "liebherr", "volvo"],
+        "model": ["[a-z0-9\\-]+"],
+        "an": ["\\d{4}"],
+        "ore": ["\\d+\\s*ore"],
+        "stare": ["excelentă", "foarte bună", "bună"],
+        "dotari": ["cabina", "ac", "senzori"]
+      }
+    },
+    "Utilaje Agricole": {
+      "requiredFields": ["marca", "model", "an", "ore", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, an {an}, {ore} ore – {stare}\n\nUtilaj agricol în stare {stare}, întreținut regulat.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["john deere", "new holland", "case ih", "claas"],
+        "model": ["[a-z0-9\\-]+"],
+        "an": ["\\d{4}"],
+        "ore": ["\\d+\\s*ore"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Echipamente Forestiere": {
+      "requiredFields": ["marca", "model", "an", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, an {an} – {stare}\n\nEchipament forestier în stare {stare}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["john deere", "timberjack", "valmet"],
+        "model": ["[a-z0-9\\-]+"],
+        "an": ["\\d{4}"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Generatoare și Compresoare": {
+      "requiredFields": ["marca", "model", "putere", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, {putere} – {stare}\n\nGenerator/compresor în stare {stare}, funcționează perfect.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["atlas copco", "ingersoll rand", "kaeser"],
+        "model": ["[a-z0-9\\-]+"],
+        "putere": ["\\d+\\s*kw", "\\d+\\s*hp"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Scule Profesionale": {
+      "requiredFields": ["marca", "model", "tip", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, tip {tip} – {stare}\n\nScule profesionale în stare {stare}, funcționale.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["bosch", "makita", "dewalt", "milwaukee"],
+        "model": ["[a-z0-9\\-]+"],
+        "tip": ["bormasina", "ciocan", "polizor"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Echipamente Ateliere Auto": {
+      "requiredFields": ["marca", "model", "tip", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, tip {tip} – {stare}\n\nEchipament atelier auto în stare {stare}, funcțional.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["bendpak", "rotary", "snap-on"],
+        "model": ["[a-z0-9\\-]+"],
+        "tip": ["ridicatoare", "compresor", "scule"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Echipamente Electrice / Sudură": {
+      "requiredFields": ["marca", "model", "tip", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, tip {tip} – {stare}\n\nEchipament sudură în stare {stare}, funcțional.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["lincoln", "miller", "esab"],
+        "model": ["[a-z0-9\\-]+"],
+        "tip": ["inverter", "mig", "tig"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    }
+  },
+  "Artă & Antichități": {
+    "Picturi": {
+      "requiredFields": ["artist", "tehnica", "dimensiuni", "an", "stare", "certificat"],
+      "templates": [
+        {
+          "pattern": "Pictură {artist}, {tehnica}, {dimensiuni}, an {an} – {stare}\n\nCertificat: {certificat}.\n\nOperă de artă autentică.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "artist": ["[a-zăâîșț\\s]+"],
+        "tehnica": ["ulei", "acrilic", "acvarelă", "pastel"],
+        "dimensiuni": ["\\d+x\\d+\\s*cm"],
+        "an": ["\\d{4}"],
+        "stare": ["excelentă", "foarte bună"],
+        "certificat": ["da", "nu", "autentic"]
+      }
+    },
+    "Sculpturi": {
+      "requiredFields": ["artist", "material", "dimensiuni", "an", "stare"],
+      "templates": [
+        {
+          "pattern": "Sculptură {artist}, {material}, {dimensiuni}, an {an} – {stare}\n\nOperă de artă autentică.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "artist": ["[a-zăâîșț\\s]+"],
+        "material": ["bronz", "marmura", "lemn", "metal"],
+        "dimensiuni": ["\\d+x\\d+x\\d+\\s*cm"],
+        "an": ["\\d{4}"],
+        "stare": ["excelentă", "foarte bună"]
+      }
+    },
+    "Bijuterii și Ceasuri": {
+      "requiredFields": ["marca", "model", "material", "stare", "certificat"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, {material} – {stare}\n\nCertificat: {certificat}.\n\nBijuterie/ceas autentic.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["rolex", "omega", "cartier", "tiffany"],
+        "model": ["[a-z0-9\\-]+"],
+        "material": ["aur", "argint", "platină"],
+        "stare": ["excelentă", "foarte bună"],
+        "certificat": ["da", "nu", "autentic"]
+      }
+    },
+    "Obiecte de Colecție": {
+      "requiredFields": ["tip", "an", "stare", "raritate"],
+      "templates": [
+        {
+          "pattern": "Obiect de colecție {tip}, an {an} – {stare}\n\nRaritate: {raritate}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["monede", "stampile", "figurine"],
+        "an": ["\\d{4}"],
+        "stare": ["excelentă", "foarte bună"],
+        "raritate": ["rar", "foarte rar", "unic"]
+      }
+    },
+    "Mobilier de Epocă": {
+      "requiredFields": ["tip", "epoca", "material", "stare"],
+      "templates": [
+        {
+          "pattern": "Mobilier de epocă {tip}, {epoca}, {material} – {stare}\n\nPiesă autentică, în stare {stare}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["masa", "scaun", "dulap"],
+        "epoca": ["secolul \\d+", "anii \\d{4}"],
+        "material": ["lemn", "marmura", "metal"],
+        "stare": ["excelentă", "foarte bună"]
+      }
+    },
+    "Cărți Rare, Hărți Vechi": {
+      "requiredFields": ["titlu", "autor", "an", "stare"],
+      "templates": [
+        {
+          "pattern": "Carte rară \"{titlu}\", {autor}, an {an} – {stare}\n\nEdiție rară, în stare {stare}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "titlu": ["[a-zăâîșț\\s]+"],
+        "autor": ["[a-zăâîșț\\s]+"],
+        "an": ["\\d{4}"],
+        "stare": ["excelentă", "foarte bună"]
+      }
+    },
+    "Fotografie Artistică": {
+      "requiredFields": ["artist", "tehnica", "dimensiuni", "an", "stare"],
+      "templates": [
+        {
+          "pattern": "Fotografie artistică {artist}, {tehnica}, {dimensiuni}, an {an} – {stare}\n\nOperă autentică.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "artist": ["[a-zăâîșț\\s]+"],
+        "tehnica": ["digital", "analog", "polaroid"],
+        "dimensiuni": ["\\d+x\\d+\\s*cm"],
+        "an": ["\\d{4}"],
+        "stare": ["excelentă", "foarte bună"]
+      }
+    },
+    "Licitații Caritabile": {
+      "requiredFields": ["tip", "descriere", "stare"],
+      "templates": [
+        {
+          "pattern": "Licitație caritabilă: {tip}.\n\n{descriere}\n\nStare: {stare}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["[a-zăâîșț\\s]+"],
+        "descriere": [".+"],
+        "stare": ["excelentă", "foarte bună"]
+      }
+    }
+  },
+  "Casă & Grădină": {
+    "Mobilier Interior": {
+      "requiredFields": ["tip", "material", "dimensiuni", "stare"],
+      "templates": [
+        {
+          "pattern": "Mobilier {tip}, {material}, {dimensiuni} – {stare}\n\nPiesă în stare {stare}, funcțională.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["masa", "scaun", "canapea", "dulap"],
+        "material": ["lemn", "metal", "stofa", "piele"],
+        "dimensiuni": ["\\d+x\\d+\\s*cm"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Mobilier Exterior": {
+      "requiredFields": ["tip", "material", "stare"],
+      "templates": [
+        {
+          "pattern": "Mobilier exterior {tip}, {material} – {stare}\n\nRezistent la intemperii, în stare {stare}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["masa", "scaun", "leagan"],
+        "material": ["rattan", "metal", "lemn"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Echipamente de Grădinărit": {
+      "requiredFields": ["tip", "marca", "stare"],
+      "templates": [
+        {
+          "pattern": "Echipament grădinărit {tip}, {marca} – {stare}\n\nÎn stare {stare}, funcțional.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["tocator", "cositoare", "tractor"],
+        "marca": ["[a-z0-9\\-]+"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Decorațiuni": {
+      "requiredFields": ["tip", "material", "stare"],
+      "templates": [
+        {
+          "pattern": "Decorațiune {tip}, {material} – {stare}\n\nÎn stare {stare}.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["tablou", "sculptura", "vaza"],
+        "material": ["ceramica", "sticla", "metal"],
+        "stare": ["excelentă", "foarte bună"]
+      }
+    },
+    "Electrocasnice": {
+      "requiredFields": ["marca", "model", "tip", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, {tip} – {stare}\n\nElectrocasnic în stare {stare}, funcționează perfect.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["bosch", "siemens", "whirlpool", "lg"],
+        "model": ["[a-z0-9\\-]+"],
+        "tip": ["frigider", "masina spalat", "cuptor"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    }
+  },
+  "Modă & Lifestyle": {
+    "Haine de Designer": {
+      "requiredFields": ["marca", "marime", "material", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca}, mărime {marime}, {material} – {stare}\n\nHaină designer în stare {stare}.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["gucci", "prada", "versace", "armani"],
+        "marime": ["xs", "s", "m", "l", "xl", "xxl"],
+        "material": ["bumbac", "matase", "lana"],
+        "stare": ["excelentă", "foarte bună"]
+      }
+    },
+    "Încălțăminte": {
+      "requiredFields": ["marca", "marime", "material", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca}, mărime {marime}, {material} – {stare}\n\nÎncălțăminte în stare {stare}.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["nike", "adidas", "gucci", "prada"],
+        "marime": ["\\d+", "\\d+\\s*eu"],
+        "material": ["piele", "textil", "sintetic"],
+        "stare": ["excelentă", "foarte bună"]
+      }
+    },
+    "Genți & Accesorii": {
+      "requiredFields": ["marca", "tip", "material", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca}, {tip}, {material} – {stare}\n\nAccesoriu în stare {stare}.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["louis vuitton", "chanel", "gucci"],
+        "tip": ["genta", "portofel", "curea"],
+        "material": ["piele", "canvas", "sintetic"],
+        "stare": ["excelentă", "foarte bună"]
+      }
+    },
+    "Parfumuri & Cosmetice": {
+      "requiredFields": ["marca", "model", "volum", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, {volum} – {stare}\n\nParfum/cosmetice în stare {stare}.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["chanel", "dior", "versace"],
+        "model": ["[a-z0-9\\-]+"],
+        "volum": ["\\d+\\s*ml"],
+        "stare": ["nou", "folosit"]
+      }
+    },
+    "Ceasuri de Lux": {
+      "requiredFields": ["marca", "model", "material", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, {material} – {stare}\n\nCeas de lux în stare {stare}, funcționează perfect.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["rolex", "omega", "tag heuer"],
+        "model": ["[a-z0-9\\-]+"],
+        "material": ["aur", "otel", "titan"],
+        "stare": ["excelentă", "foarte bună"]
+      }
+    }
+  },
+  "Mama și copilul": {
+    "Haine copil": {
+      "requiredFields": ["tip", "marime", "stare"],
+      "templates": [{"pattern": "{tip}, mărime {marime} – {stare}\n\nHaine copil în stare {stare}.\n\nPredare personală sau curierat."}],
+      "fieldExtractors": {"tip": ["body", "tricou", "pantaloni", "rochita"], "marime": ["0-3m", "3-6m", "6-12m", "1-2y", "2-4y"], "stare": ["nou", "excelentă", "foarte bună"]}
+    },
+    "Încălțăminte copil": {
+      "requiredFields": ["tip", "marime", "stare"],
+      "templates": [{"pattern": "{tip}, mărime {marime} – {stare}\n\nÎncălțăminte copil în stare {stare}.\n\nPredare personală sau curierat."}],
+      "fieldExtractors": {"tip": ["pantofi", "cizme", "sandale"], "marime": ["\\d+", "\\d+\\s*eu"], "stare": ["nou", "excelentă", "foarte bună"]}
+    },
+    "Jucării": {
+      "requiredFields": ["tip", "varsta", "stare"],
+      "templates": [{"pattern": "{tip}, vârstă {varsta} – {stare}\n\nJucărie în stare {stare}.\n\nPredare personală sau curierat."}],
+      "fieldExtractors": {"tip": ["lego", "papusi", "masinute", "puzzle"], "varsta": ["0+", "1+", "3+", "6+"], "stare": ["nou", "excelentă", "foarte bună"]}
+    },
+    "Mobilier copil": {
+      "requiredFields": ["tip", "stare"],
+      "templates": [{"pattern": "{tip} – {stare}\n\nMobilier copil în stare {stare}.\n\nPredare personală."}],
+      "fieldExtractors": {"tip": ["patut", "comoda", "dulap", "scaun"], "stare": ["excelentă", "foarte bună", "bună"]}
+    },
+    "Coșul copilului": {
+      "requiredFields": ["tip", "stare"],
+      "templates": [{"pattern": "{tip} – {stare}\n\nProdus puericultură în stare {stare}.\n\nPredare personală sau curierat."}],
+      "fieldExtractors": {"tip": ["cos", "patut portabil", "monitor"], "stare": ["nou", "excelentă", "foarte bună"]}
+    },
+    "Îngrijire bebeluși": {
+      "requiredFields": ["tip", "stare"],
+      "templates": [{"pattern": "{tip} – {stare}\n\nProdus îngrijire bebeluși în stare {stare}.\n\nPredare personală sau curierat."}],
+      "fieldExtractors": {"tip": ["termometru", "aspirator nazal", "umidificator"], "stare": ["nou", "excelentă"]}
+    },
+    "Scaune auto copil": {
+      "requiredFields": ["grupa", "stare"],
+      "templates": [{"pattern": "Scaun auto copil grupa {grupa} – {stare}\n\nPredare personală."}],
+      "fieldExtractors": {"grupa": ["0", "0+", "1", "2", "3"], "stare": ["excelentă", "foarte bună", "bună"]}
+    },
+    "Cărucioare": {
+      "requiredFields": ["tip", "marca", "stare"],
+      "templates": [{"pattern": "{tip} {marca} – {stare}\n\nCărucior în stare {stare}.\n\nPredare personală."}],
+      "fieldExtractors": {"tip": ["cărucior", "tricicleta", "trotinetă"], "marca": ["[a-z0-9\\-]+"], "stare": ["excelentă", "foarte bună", "bună"]}
+    },
+    "Hranire copil": {
+      "requiredFields": ["tip", "stare"],
+      "templates": [{"pattern": "{tip} – {stare}\n\nProdus hranire copil în stare {stare}.\n\nPredare personală sau curierat."}],
+      "fieldExtractors": {"tip": ["biberon", "sterilizator", "incalzitor"], "stare": ["nou", "excelentă", "foarte bună"]}
+    }
+  },
+  "Agricultură & Zootehnie": {
+    "Tractoare, Combine": {
+      "requiredFields": ["marca", "model", "an", "ore", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, an {an}, {ore} ore – {stare}\n\nTractor/combine în stare {stare}, întreținut regulat.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["john deere", "new holland", "case ih"],
+        "model": ["[a-z0-9\\-]+"],
+        "an": ["\\d{4}"],
+        "ore": ["\\d+\\s*ore"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Remorci Agricole": {
+      "requiredFields": ["marca", "model", "capacitate", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, capacitate {capacitate} – {stare}\n\nRemorcă agricolă în stare {stare}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["[a-z0-9\\-]+"],
+        "model": ["[a-z0-9\\-]+"],
+        "capacitate": ["\\d+\\s*tona"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Echipamente de Irigații": {
+      "requiredFields": ["tip", "capacitate", "stare"],
+      "templates": [
+        {
+          "pattern": "Echipament irigații {tip}, capacitate {capacitate} – {stare}\n\nÎn stare {stare}, funcțional.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["pivot", "aspersor", "stropitoare"],
+        "capacitate": ["\\d+\\s*ha"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Animale": {
+      "requiredFields": ["specie", "rasa", "varsta", "stare"],
+      "templates": [
+        {
+          "pattern": "{specie} {rasa}, vârstă {varsta} – {stare}\n\nAnimal în stare {stare}, sănătos.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "specie": ["bovine", "ovine", "porcine", "cabaline"],
+        "rasa": ["[a-zăâîșț\\s]+"],
+        "varsta": ["\\d+\\s*ani", "\\d+\\s*luni"],
+        "stare": ["sănătos", "excelent"]
+      }
+    },
+    "Semințe, Furaje, Îngrășăminte": {
+      "requiredFields": ["tip", "cantitate", "stare"],
+      "templates": [
+        {
+          "pattern": "{tip}, cantitate {cantitate} – {stare}\n\nProdus agricol în stare {stare}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["seminte", "furaje", "ingrasaminte"],
+        "cantitate": ["\\d+\\s*kg", "\\d+\\s*tona"],
+        "stare": ["nou", "folosit"]
+      }
+    }
+  },
+  "Maritime & Aeronautice": {
+    "Bărci, Iahturi, Skijeturi": {
+      "requiredFields": ["marca", "model", "an", "lungime", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, an {an}, {lungime} m – {stare}\n\nAmbarcațiune în stare {stare}, întreținută regulat.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["beneteau", "bavaria", "sunseeker"],
+        "model": ["[a-z0-9\\-]+"],
+        "an": ["\\d{4}"],
+        "lungime": ["\\d+\\s*m"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Motoare Marine": {
+      "requiredFields": ["marca", "model", "putere", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, {putere} CP – {stare}\n\nMotor marin în stare {stare}, funcțional.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["yamaha", "mercury", "volvo penta"],
+        "model": ["[a-z0-9\\-]+"],
+        "putere": ["\\d+\\s*cp", "\\d+\\s*hp"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Avioane Mici / Ultraleușoare": {
+      "requiredFields": ["marca", "model", "an", "ore", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, an {an}, {ore} ore – {stare}\n\nAvion în stare {stare}, întreținut regulat.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["cessna", "piper", "diamond"],
+        "model": ["[a-z0-9\\-]+"],
+        "an": ["\\d{4}"],
+        "ore": ["\\d+\\s*ore"],
+        "stare": ["excelentă", "foarte bună"]
+      }
+    },
+    "Dronuri Industriale": {
+      "requiredFields": ["marca", "model", "autonomie", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, autonomie {autonomie} – {stare}\n\nDronă industrială în stare {stare}, funcțională.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["dji", "autel", "parrot"],
+        "model": ["[a-z0-9\\-]+"],
+        "autonomie": ["\\d+\\s*min"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    }
+  },
+  "Business & Licitații": {
+    "Echipamente de Birou": {
+      "requiredFields": ["marca", "model", "tip", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, {tip} – {stare}\n\nEchipament birou în stare {stare}, funcțional.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["hp", "canon", "epson"],
+        "model": ["[a-z0-9\\-]+"],
+        "tip": ["imprimanta", "scanner", "fax"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Mobilier Comercial": {
+      "requiredFields": ["tip", "material", "dimensiuni", "stare"],
+      "templates": [
+        {
+          "pattern": "Mobilier comercial {tip}, {material}, {dimensiuni} – {stare}\n\nÎn stare {stare}, funcțional.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["birou", "scaun", "raft"],
+        "material": ["lemn", "metal", "stofa"],
+        "dimensiuni": ["\\d+x\\d+\\s*cm"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Calculatoare Second-Hand": {
+      "requiredFields": ["marca", "model", "procesor", "ram", "stocare", "stare"],
+      "templates": [
+        {
+          "pattern": "{marca} {model}, procesor {procesor}, {ram} RAM, {stocare} – {stare}\n\nCalculator în stare {stare}, funcțional.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "marca": ["dell", "hp", "lenovo"],
+        "model": ["[a-z0-9\\-]+"],
+        "procesor": ["intel", "amd", "i3", "i5", "i7"],
+        "ram": ["\\d+\\s*gb"],
+        "stocare": ["\\d+\\s*gb"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    },
+    "Licitații Lichidări Firme": {
+      "requiredFields": ["tip", "descriere", "stare"],
+      "templates": [
+        {
+          "pattern": "Lichidare firmă: {tip}.\n\n{descriere}\n\nStare: {stare}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["[a-zăâîșț\\s]+"],
+        "descriere": [".+"],
+        "stare": ["excelentă", "foarte bună"]
+      }
+    },
+    "Loturi Stocuri Produse": {
+      "requiredFields": ["tip", "cantitate", "stare"],
+      "templates": [
+        {
+          "pattern": "Lot stoc {tip}, cantitate {cantitate} – {stare}\n\nProduse în stare {stare}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["[a-zăâîșț\\s]+"],
+        "cantitate": ["\\d+\\s*buc", "\\d+\\s*paleti"],
+        "stare": ["nou", "folosit"]
+      }
+    }
+  },
+  "Materiale Construcții": {
+    "Ciment, Cărămidă, Oțel": {
+      "requiredFields": ["tip", "cantitate", "calitate", "stare"],
+      "templates": [
+        {
+          "pattern": "{tip}, cantitate {cantitate}, calitate {calitate} – {stare}\n\nMateriale construcții în stare {stare}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["ciment", "caramida", "otel"],
+        "cantitate": ["\\d+\\s*tona", "\\d+\\s*buc"],
+        "calitate": ["standard", "premium"],
+        "stare": ["nou", "folosit"]
+      }
+    },
+    "Materiale Izolație": {
+      "requiredFields": ["tip", "grosime", "stare"],
+      "templates": [
+        {
+          "pattern": "Material izolație {tip}, grosime {grosime} – {stare}\n\nÎn stare {stare}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["polistiren", "vata", "spuma"],
+        "grosime": ["\\d+\\s*cm"],
+        "stare": ["nou", "folosit"]
+      }
+    },
+    "Feronerie, Unelte": {
+      "requiredFields": ["tip", "marca", "stare"],
+      "templates": [
+        {
+          "pattern": "{tip} {marca} – {stare}\n\nFeronerie/unelte în stare {stare}.\n\nPredare personală sau curierat."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["suruburi", "buloane", "unelte"],
+        "marca": ["[a-z0-9\\-]+"],
+        "stare": ["nou", "folosit"]
+      }
+    },
+    "Uși, Ferestre, Tâmplărie": {
+      "requiredFields": ["tip", "material", "dimensiuni", "stare"],
+      "templates": [
+        {
+          "pattern": "{tip}, {material}, {dimensiuni} – {stare}\n\nTâmplărie în stare {stare}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["usa", "fereastra", "tamplarie"],
+        "material": ["lemn", "pvc", "aluminiu"],
+        "dimensiuni": ["\\d+x\\d+\\s*cm"],
+        "stare": ["excelentă", "foarte bună", "bună"]
+      }
+    }
+  },
+  "Diverse / Speciale": {
+    "Licitații Caritabile": {
+      "requiredFields": ["tip", "descriere", "stare"],
+      "templates": [
+        {
+          "pattern": "Licitație caritabilă: {tip}.\n\n{descriere}\n\nStare: {stare}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["[a-zăâîșț\\s]+"],
+        "descriere": [".+"],
+        "stare": ["excelentă", "foarte bună"]
+      }
+    },
+    "Obiecte Militare / Istorice": {
+      "requiredFields": ["tip", "epoca", "stare", "certificat"],
+      "templates": [
+        {
+          "pattern": "Obiect {tip}, epocă {epoca} – {stare}\n\nCertificat: {certificat}.\n\nPiesă istorică autentică.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["[a-zăâîșț\\s]+"],
+        "epoca": ["secolul \\d+", "anii \\d{4}"],
+        "stare": ["excelentă", "foarte bună"],
+        "certificat": ["da", "nu", "autentic"]
+      }
+    },
+    "NFT / Artă Digitală": {
+      "requiredFields": ["tip", "blockchain", "stare"],
+      "templates": [
+        {
+          "pattern": "{tip}, blockchain {blockchain} – {stare}\n\nArta digitală autentică.\n\nPredare digitală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["nft", "arta digitala"],
+        "blockchain": ["ethereum", "polygon", "solana"],
+        "stare": ["nou", "verificat"]
+      }
+    },
+    "Colecții Private": {
+      "requiredFields": ["tip", "descriere", "stare"],
+      "templates": [
+        {
+          "pattern": "Colecție privată: {tip}.\n\n{descriere}\n\nStare: {stare}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["[a-zăâîșț\\s]+"],
+        "descriere": [".+"],
+        "stare": ["excelentă", "foarte bună"]
+      }
+    },
+    "Bunuri Confiscate / Executări": {
+      "requiredFields": ["tip", "descriere", "stare"],
+      "templates": [
+        {
+          "pattern": "Bun confiscat/execuție: {tip}.\n\n{descriere}\n\nStare: {stare}.\n\nPredare personală."
+        }
+      ],
+      "fieldExtractors": {
+        "tip": ["[a-zăâîșț\\s]+"],
+        "descriere": [".+"],
+        "stare": ["excelentă", "foarte bună"]
+      }
+    }
+  }
+}

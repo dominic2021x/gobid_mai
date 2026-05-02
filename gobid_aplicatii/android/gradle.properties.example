@@ -1,0 +1,14 @@
+# Project-wide Gradle settings.
+# Copy this file to gradle.properties and replace YOUR_STORE_PASSWORD / YOUR_KEY_PASSWORD with real values.
+# Do not commit gradle.properties with secrets.
+
+org.gradle.jvmargs=-Xmx1536m
+
+android.useAndroidX=true
+android.suppressUnsupportedCompileSdk=35
+
+# Release signing (required for bundleRelease; fill in real values locally)
+GOBID_STORE_FILE=../gobid-release.keystore
+GOBID_STORE_PASSWORD=YOUR_STORE_PASSWORD
+GOBID_KEY_ALIAS=gobid
+GOBID_KEY_PASSWORD=YOUR_KEY_PASSWORD

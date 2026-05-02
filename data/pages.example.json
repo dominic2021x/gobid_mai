@@ -1,0 +1,43 @@
+[
+  {
+    "id": "faq",
+    "title": "Întrebări Frecvente (FAQ)",
+    "content": "Cum funcționează licitațiile pe gobid.ro? Licitațiile funcționează prin ofertare progresivă. Poți explora produsele disponibile, plasa oferte folosind tokens din contul tău, și dacă oferta ta rămâne cea mai mare până la încheierea timpului alocat, câștigi produsul. Fiecare licitație are un preț de pornire și un timp limitat de desfășurare. Cum plătesc pentru un produs câștigat? După ce câștigați o licitație, veți primi instrucțiuni de plată prin email. Puteți plăti prin transfer bancar sau card. Oferta ta este obligatorie și nu poți retrage o ofertă după ce a fost plasată.",
+    "url": "/faq"
+  },
+  {
+    "id": "terms",
+    "title": "Termeni și Condiții",
+    "content": "Termeni și Condiții de Utilizare: Utilizând platforma gobid.ro, acceptați următoarele condiții: 1. Toate ofertele sunt finale și obligatorii. 2. Plata trebuie efectuată în termen de 48 de ore după câștigarea licitației. 3. Platforma nu este responsabilă pentru calitatea produselor, dar oferă garanție de autenticitate. 4. Utilizatorii sunt responsabili pentru verificarea produselor la primire. 5. Orice dispută va fi rezolvată prin mediere sau instanțe competente.",
+    "url": "/terms"
+  },
+  {
+    "id": "guide",
+    "title": "Ghid de Utilizare",
+    "content": "Ghid complet de utilizare gobid.ro: 1. Creează un cont - Înregistrează-te cu email și parolă. 2. Explorează produsele - Navighează prin categoriile disponibile. 3. Plasează oferte - Folosește tokens pentru a plasa oferte pentru produsele dorite. 4. Urmărește licitațiile - Monitorizează ofertele și timpul rămas. 5. Plătește pentru produsele câștigate - Efectuează plata în termen de 48 de ore. Tokens sunt moneda virtuală necesară pentru participarea la licitații. Poți cumpăra tokens din dashboard-ul tău, secțiunea Tokens.",
+    "url": "/guide"
+  },
+  {
+    "id": "tokens",
+    "title": "Despre Tokens",
+    "content": "Tokens sunt moneda virtuală a platformei gobid.ro. Sunt necesari pentru a plasa oferte în licitații. Poți cumpăra tokens din dashboard-ul tău, secțiunea Tokens, unde găsești pachete disponibile. Tokens nu expiră și poți folosi când dorești. Cu cât ai mai mulți tokens, cu atât poți licita mai mult. Pachetele de tokens includ bonusuri pentru cumpărături mai mari.",
+    "url": "/tokens"
+  }
+]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

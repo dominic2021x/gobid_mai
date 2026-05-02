@@ -1,0 +1,32 @@
+{
+  "name": "gobid.ro - Licitații Online",
+  "short_name": "gobid",
+  "description": "Platforma ta de încredere pentru licitații online 100% românească",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#0f172a",
+  "background_color": "#ffffff",
+  "categories": ["shopping", "business"],
+  "icons": [
+    {
+      "src": "/logo_alb.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/logo_negru.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.ico",
+      "sizes": "48x48",
+      "type": "image/x-icon",
+      "purpose": "any"
+    }
+  ]
+}
