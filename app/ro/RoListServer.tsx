@@ -9,7 +9,7 @@ import { mergeDefaultRoListingsLimitForSsr } from "@/lib/ro/roListingsPagination
 import { headers } from "next/headers";
 import { resolveAccess } from "@/lib/server/access/resolveAccess";
 import { serializeListingForClient } from "@/lib/ro/roListingsServerUtils";
-import RoAuctionsViewClient from "./RoAuctionsViewClient";
+import { RoAuctionsViewClient } from "./RoAuctionsViewClient";
 import type { InitialListingsPayload } from "./types";
 
 /**
