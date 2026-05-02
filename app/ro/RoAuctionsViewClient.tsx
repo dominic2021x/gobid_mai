@@ -765,13 +765,17 @@ async function fetchRoListingsJsonCached(url: string, signal?: AbortSignal): Pro
   if (signal?.aborted) throw createAbortError();
 
   const cached = getRoListingsClientCache(url);
-  if (cached) return cached;
+  if (cached) {
+    if (signal?.aborted) throw createAbortError();
+    return cached;
+  }
 
   let promise = roListingsInFlight.get(url);
   if (!promise) {
     promise = fetch(url, {
       method: "GET",
       cache: "no-store",
+      signal,
     }).then(async (res) => {
       if (!res.ok) {
         const text = await res.text().catch(() => "");
@@ -2888,6 +2892,17 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
 
   const [isPageNavigating, setIsPageNavigating] = useState(false);
   const [pendingPage, setPendingPage] = useState<number | null>(null);
+  /**
+   * În timpul `startRouteTransition`, `useSearchParams()` poate rămâne în urmă față de bara de adresă.
+   * `pendingPage` reflectă imediat click-ul din paginare — altfel fetch-ul folosea offset-ul paginii vechi,
+   * iar răspunsurile „în curs” puteau suprascrie lista cu date din pagina greșită la navigare rapidă.
+   */
+  const listingsOffsetForFetch = useMemo(() => {
+    if (pendingPage != null) {
+      return (pendingPage - 1) * listingsPageSize;
+    }
+    return listingsOffset;
+  }, [pendingPage, listingsOffset, listingsPageSize]);
   const paginationPrefetchAbortRef = useRef<AbortController | null>(null);
   const pendingListingsPageCursorRef = useRef<string | null>(null);
 
@@ -2998,7 +3013,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     const canUseServerSnapshot =
       initialListings != null &&
       !hasGeoCenter &&
-      listingsOffset === (initialListings?.from ?? 0) &&
+      listingsOffsetForFetch === (initialListings?.from ?? 0) &&
       listingsPageSize === serverSnapshotLimit;
 
     const commitExactPayload = (payload: {
@@ -3037,7 +3052,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
         const cursorForCurrentPage = pendingListingsPageCursorRef.current;
         pendingListingsPageCursorRef.current = null;
         const payload = await fetchRoListingsPageRef.current(
-          listingsOffset,
+          listingsOffsetForFetch,
           listingsPageSize,
           cursorForCurrentPage,
           controller.signal,
@@ -3066,7 +3081,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     filtersSignatureFromUrl,
     filterRows,
     initialListings,
-    listingsOffset,
+    listingsOffsetForFetch,
     listingsPageSize,
     serverSnapshotLimit,
     hasGeoCenter,
@@ -3077,8 +3092,8 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
 
   useEffect(() => {
     if (!mounted || !hasMoreRemote || isLoadingMoreRemote) return;
-    const nextOffset = listingsOffset + listingsPageSize;
-    if (nextOffset <= listingsOffset || nextOffset > RO_LISTINGS_MAX_PAGE * listingsPageSize) return;
+    const nextOffset = listingsOffsetForFetch + listingsPageSize;
+    if (nextOffset <= listingsOffsetForFetch || nextOffset > RO_LISTINGS_MAX_PAGE * listingsPageSize) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       void fetchRoListingsPageRef.current(
@@ -3094,7 +3109,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [mounted, hasMoreRemote, isLoadingMoreRemote, listingsOffset, listingsPageSize, nextRemoteCursor]);
+  }, [mounted, hasMoreRemote, isLoadingMoreRemote, listingsOffsetForFetch, listingsPageSize, nextRemoteCursor]);
 
   /** Trebuie să coincidă cu `fetchRoListingsPage`: scope/crosslist + geo din state (nearLat/Lng) înlocuiește city/location/radius din URL. */
   const countQueryString = useMemo(() => {
@@ -3126,7 +3141,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
   // Total count: keep it only when it does not contradict the loaded page/hasMore state.
   // (Nu golim totalul la geo: `/api/ro/listings-count` folosește aceiași parametri ca listarea, inclusiv rază + centru.)
   useEffect(() => {
-    const minimumLoadedTotal = listingsOffset + realProducts.length + (hasMoreRemote ? 1 : 0);
+    const minimumLoadedTotal = listingsOffsetForFetch + realProducts.length + (hasMoreRemote ? 1 : 0);
     const initialTotal =
       typeof initialListings?.totalCount === "number" && initialListings.totalCount >= minimumLoadedTotal
         ? initialListings.totalCount
@@ -3155,7 +3170,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     };
     fetchCount();
     return () => controller.abort();
-  }, [countQueryString, hasMoreRemote, initialListings?.totalCount, listingsOffset, nearLat, nearLng, realProducts.length]);
+  }, [countQueryString, hasMoreRemote, initialListings?.totalCount, listingsOffsetForFetch, nearLat, nearLng, realProducts.length]);
 
   // Numere exacte din DB pentru filtre (categorii + subcategorii), via endpoint server-side.
   useEffect(() => {
@@ -6036,7 +6051,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
   useEffect(() => {
     lastStableDisplayedListSignatureRef.current = "";
     setLastStableDisplayedList([]);
-  }, [listingsOffset, listingsPageSize]);
+  }, [listingsOffsetForFetch, listingsPageSize]);
 
   useEffect(() => {
     if (displayedList.length === 0) return;
@@ -6075,12 +6090,12 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     mounted &&
     visibleDisplayedList.length > 0 &&
     (relaxedGapFillLoading || isGeoRadiusRefreshing || isLoadingMoreRemote);
-  const displayedRangeStart = visibleDisplayedList.length > 0 ? listingsOffset + 1 : 0;
+  const displayedRangeStart = visibleDisplayedList.length > 0 ? listingsOffsetForFetch + 1 : 0;
   const displayedRangeEnd = visibleDisplayedList.length > 0
-    ? listingsOffset + visibleDisplayedList.length
+    ? listingsOffsetForFetch + visibleDisplayedList.length
     : 0;
   const displayedRangeLabel =
-    listingsOffset > 0 && displayedRangeStart > 0
+    listingsOffsetForFetch > 0 && displayedRangeStart > 0
       ? `${displayedRangeStart.toLocaleString('ro-RO')}-${displayedRangeEnd.toLocaleString('ro-RO')}`
       : visibleDisplayedList.length.toLocaleString('ro-RO');
 
@@ -6227,7 +6242,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     const currentSignature = normalizeReturnSearchSignature(window.location.search);
     if (state.searchSignature && state.searchSignature !== currentSignature) return;
     if (typeof state.page === "number" && state.page !== listingsUrlPage) return;
-    if (typeof state.offset === "number" && state.offset !== listingsOffset) return;
+    if (typeof state.offset === "number" && state.offset !== listingsOffsetForFetch) return;
     if (typeof state.limit === "number" && state.limit !== listingsPageSize) return;
     if (typeof state.filtersSignature === "string" && state.filtersSignature !== filtersSignatureFromUrl) return;
     if (typeof state.ts === "number" && Date.now() - state.ts > RO_LISTING_RETURN_TTL_MS) {
@@ -6324,7 +6339,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     isLoadingMoreRemote,
     isPageNavigating,
     isRouteTransitionPending,
-    listingsOffset,
+    listingsOffsetForFetch,
     listingsPageSize,
     listingsUrlPage,
     mounted,
@@ -10938,7 +10953,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
                 <WheelPaginationFooter isDarkMode={isDarkMode}>
                   <WheelPagination
                     totalPages={displayPaginationTotalPages}
-                    currentPage={listingsUrlPage}
+                    currentPage={pendingPage ?? listingsUrlPage}
                     onPageChange={goToListingsPage}
                     canGoNext={hasMore}
                     isDarkMode={isDarkMode}
