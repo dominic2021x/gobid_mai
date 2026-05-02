@@ -2741,6 +2741,21 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     return () => window.clearTimeout(timer);
   }, [locationRadiusKm, nearLat, nearLng]);
 
+  /**
+   * Filtru strict pe rază în API (șterge location/city din query) doar pentru GPS / „Locația mea”.
+   * Pentru oraș selectat manual, geocodarea setează nearLat/Lng doar pentru sortare după distanță în UI —
+   * dacă am trimite și radius la API, am înlocui locality_search (SSR) cu Haversine și lista „dispare”.
+   */
+  const listingsUseServerGeoRadius = useMemo(
+    () =>
+      locationCenterFromGps &&
+      nearLat != null &&
+      nearLng != null &&
+      Number.isFinite(nearLat) &&
+      Number.isFinite(nearLng),
+    [locationCenterFromGps, nearLat, nearLng],
+  );
+
   // Listare și load more: parametri din URL + scope din state (ca checkbox-urile scope să aibă efect imediat).
   const fetchRoListingsPage = useCallback(
     async (
@@ -2764,9 +2779,9 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       } else {
         sp.delete("includeExecutari");
       }
-      if (nearLat != null && nearLng != null && Number.isFinite(nearLat) && Number.isFinite(nearLng)) {
-        sp.set("nearLat", String(Number(nearLat.toFixed(6))));
-        sp.set("nearLng", String(Number(nearLng.toFixed(6))));
+      if (listingsUseServerGeoRadius) {
+        sp.set("nearLat", String(Number(nearLat!.toFixed(6))));
+        sp.set("nearLng", String(Number(nearLng!.toFixed(6))));
         // Fast geo mode: show nearest listings immediately instead of scanning a strict radius first.
         sp.delete("location");
         sp.delete("locations");
@@ -2775,14 +2790,14 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
         sp.set("radiusKm", String(clampRoRadiusKmForApi(remoteLocationRadiusKm)));
       }
       const params = buildListingsApiParams(sp, from, limit, cursor);
-      if (nearLat != null && nearLng != null && Number.isFinite(nearLat) && Number.isFinite(nearLng)) {
+      if (listingsUseServerGeoRadius) {
         params.set("mode", "background");
       } else {
         params.set("mode", "instant");
       }
       return fetchRoListingsJsonCached(`/api/ro/listings?${params.toString()}`, signal);
     },
-    [searchParams, listingsScope, includeExecutariCrosslist, nearLat, nearLng, remoteLocationRadiusKm]
+    [searchParams, listingsScope, includeExecutariCrosslist, listingsUseServerGeoRadius, nearLat, nearLng, remoteLocationRadiusKm]
   );
 
   /** Același contract ca fetchRoListingsPage, dar fără radiusKm — completare când rază strictă returnează 0 rezultate. */
@@ -2799,22 +2814,22 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       }
       sp.delete("radiusKm");
       sp.delete("locations");
-      if (nearLat != null && nearLng != null && Number.isFinite(nearLat) && Number.isFinite(nearLng)) {
-        sp.set("nearLat", String(Number(nearLat.toFixed(6))));
-        sp.set("nearLng", String(Number(nearLng.toFixed(6))));
+      if (listingsUseServerGeoRadius) {
+        sp.set("nearLat", String(Number(nearLat!.toFixed(6))));
+        sp.set("nearLng", String(Number(nearLng!.toFixed(6))));
         // Pentru fallback „cele mai apropiate”, nu mai limităm la localitatea selectată.
         sp.delete("location");
         sp.delete("city");
       }
       const params = buildListingsApiParams(sp, from, limit, cursor);
-      if (nearLat != null && nearLng != null && Number.isFinite(nearLat) && Number.isFinite(nearLng)) {
+      if (listingsUseServerGeoRadius) {
         params.set("mode", "background");
       } else {
         params.set("mode", "instant");
       }
       return fetchRoListingsJsonCached(`/api/ro/listings?${params.toString()}`, signal);
     },
-    [searchParams, listingsScope, includeExecutariCrosslist, nearLat, nearLng, locationCenterFromGps]
+    [searchParams, listingsScope, includeExecutariCrosslist, listingsUseServerGeoRadius, nearLat, nearLng]
   );
 
   const fetchRoListingsPageRef = useRef(fetchRoListingsPage);
@@ -2834,8 +2849,10 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
    */
   const roPaginationFiltersSignature = useMemo(
     () =>
-      `${filtersSignatureFromUrl}|geo:${nearLat ?? ""}:${nearLng ?? ""}|r${clampRoRadiusKmForApi(remoteLocationRadiusKm)}`,
-    [filtersSignatureFromUrl, nearLat, nearLng, remoteLocationRadiusKm],
+      `${filtersSignatureFromUrl}|geo:${
+        listingsUseServerGeoRadius ? `${nearLat ?? ""}:${nearLng ?? ""}` : ""
+      }|r${listingsUseServerGeoRadius ? clampRoRadiusKmForApi(remoteLocationRadiusKm) : ""}`,
+    [filtersSignatureFromUrl, listingsUseServerGeoRadius, nearLat, nearLng, remoteLocationRadiusKm],
   );
 
   const personalizedHomeItems = initialListings?.personalizedHomePreview?.items ?? [];
@@ -3003,8 +3020,6 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
   }, []);
 
   const activeExactRequestIdRef = useRef(0);
-  const hasGeoCenter = nearLat != null && nearLng != null && Number.isFinite(nearLat) && Number.isFinite(nearLng);
-
   useEffect(() => {
     const controller = new AbortController();
     const requestId = ++activeExactRequestIdRef.current;
@@ -3012,7 +3027,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     const firstPageFiltered = filterRows(firstPage);
     const canUseServerSnapshot =
       initialListings != null &&
-      !hasGeoCenter &&
+      !listingsUseServerGeoRadius &&
       listingsOffsetForFetch === (initialListings?.from ?? 0) &&
       listingsPageSize === serverSnapshotLimit;
 
@@ -3045,7 +3060,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     }
 
     setIsLoadingMoreRemote(true);
-    setIsGeoRadiusRefreshing(hasGeoCenter);
+    setIsGeoRadiusRefreshing(listingsUseServerGeoRadius);
     setGeoListingsFetchFailed(false);
     const loadCurrentPage = async () => {
       try {
@@ -3084,10 +3099,8 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     listingsOffsetForFetch,
     listingsPageSize,
     serverSnapshotLimit,
-    hasGeoCenter,
+    listingsUseServerGeoRadius,
     remoteLocationRadiusKm,
-    nearLat,
-    nearLng,
   ]);
 
   useEffect(() => {
@@ -3122,9 +3135,9 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     } else {
       sp.delete("includeExecutari");
     }
-    if (nearLat != null && nearLng != null && Number.isFinite(nearLat) && Number.isFinite(nearLng)) {
-      sp.set("nearLat", String(Number(nearLat.toFixed(6))));
-      sp.set("nearLng", String(Number(nearLng.toFixed(6))));
+    if (listingsUseServerGeoRadius) {
+      sp.set("nearLat", String(Number(nearLat!.toFixed(6))));
+      sp.set("nearLng", String(Number(nearLng!.toFixed(6))));
       sp.delete("location");
       sp.delete("locations");
       sp.delete("city");
@@ -3132,7 +3145,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       sp.set("radiusKm", String(clampRoRadiusKmForApi(remoteLocationRadiusKm)));
     }
     return buildRoListingsCountQueryString(sp);
-  }, [searchParams, listingsScope, includeExecutariCrosslist, nearLat, nearLng, remoteLocationRadiusKm]);
+  }, [searchParams, listingsScope, includeExecutariCrosslist, listingsUseServerGeoRadius, nearLat, nearLng, remoteLocationRadiusKm]);
 
   useEffect(() => {
     setListingsCountAuthoritative(false);
@@ -10178,7 +10191,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
                       isRouteTransitionPending ||
                       isOrchestratorLoading
                         ? "Căutăm cele mai apropiate rezultate…"
-                        : hasGeoCenter
+                        : listingsUseServerGeoRadius
                           ? `Nu am găsit anunțuri în raza de ${locationRadiusKm} km. Mărește raza din filtre sau alege „Toată România”.`
                           : "Nu am găsit anunțuri pentru filtrele curente."}
                     </span>
