@@ -2693,6 +2693,8 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
   );
   const [hasMoreRemote, setHasMoreRemote] = useState(initialListings?.hasMore ?? true);
   const [isGeoRadiusRefreshing, setIsGeoRadiusRefreshing] = useState(false);
+  /** Ultimul fetch geo la `/api/ro/listings` a eșuat — nu tăiem feed-ul SSR după rază (altfel grid gol). */
+  const [geoListingsFetchFailed, setGeoListingsFetchFailed] = useState(false);
   /** Rânduri API relaxate (fără rază strictă) când feed-ul principal e gol — alimentează `auctions`. */
   const [relaxedBackupProducts, setRelaxedBackupProducts] = useState<Record<string, unknown>[]>([]);
   /** Extra carduri afișate în același grid când lista principală e sub prag; deduplicate față de `paginatedItems`. */
@@ -3029,6 +3031,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
 
     setIsLoadingMoreRemote(true);
     setIsGeoRadiusRefreshing(hasGeoCenter);
+    setGeoListingsFetchFailed(false);
     const loadCurrentPage = async () => {
       try {
         const cursorForCurrentPage = pendingListingsPageCursorRef.current;
@@ -3040,10 +3043,15 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
           controller.signal,
         );
         if (controller.signal.aborted) return;
-        if (!payload.success) return;
+        if (!payload.success) {
+          setGeoListingsFetchFailed(true);
+          return;
+        }
+        setGeoListingsFetchFailed(false);
         commitExactPayload(payload);
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") return;
+        setGeoListingsFetchFailed(true);
         console.error("Error loading products page:", error);
       } finally {
         if (!controller.signal.aborted && activeExactRequestIdRef.current === requestId) {
@@ -5362,26 +5370,36 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       return combinedAuctions;
     }
 
-    return combinedAuctions
-      .map((auction, index) => ({
-        auction,
-        index,
-        distanceKm: getAuctionDistanceKm(
-          {
-            coordinates:
-              (auction as { coordinates?: unknown }).coordinates ??
-              resolvedListingCoordinates[String((auction as { id?: unknown; slug?: unknown }).id ?? (auction as { slug?: unknown }).slug ?? '')],
-            custom_fields: (auction as { custom_fields?: Record<string, unknown> | null }).custom_fields,
-          },
-          { lat: nearLat, lng: nearLng },
-        ),
-      }))
-      .filter(({ auction, distanceKm }) => {
-        if ((auction as { __fromRelaxedGeo?: boolean }).__fromRelaxedGeo) return true;
-        if (locationRadiusKm <= 0) return true;
-        if (distanceKm == null) return true;
-        return distanceKm <= locationRadiusKm;
-      })
+    /** În timpul fetch-ului geo sau după rețea eșuată, lista SSR poate fi națională — filtrul pe rază o golea complet. */
+    const skipRadiusFilter =
+      isLoadingMoreRemote ||
+      isGeoRadiusRefreshing ||
+      geoListingsFetchFailed;
+
+    const mapped = combinedAuctions.map((auction, index) => ({
+      auction,
+      index,
+      distanceKm: getAuctionDistanceKm(
+        {
+          coordinates:
+            (auction as { coordinates?: unknown }).coordinates ??
+            resolvedListingCoordinates[String((auction as { id?: unknown; slug?: unknown }).id ?? (auction as { slug?: unknown }).slug ?? '')],
+          custom_fields: (auction as { custom_fields?: Record<string, unknown> | null }).custom_fields,
+        },
+        { lat: nearLat, lng: nearLng },
+      ),
+    }));
+
+    const afterRadius = skipRadiusFilter
+      ? mapped
+      : mapped.filter(({ auction, distanceKm }) => {
+          if ((auction as { __fromRelaxedGeo?: boolean }).__fromRelaxedGeo) return true;
+          if (locationRadiusKm <= 0) return true;
+          if (distanceKm == null) return true;
+          return distanceKm <= locationRadiusKm;
+        });
+
+    return afterRadius
       .sort((a, b) => {
         const aHasDistance = a.distanceKm != null;
         const bHasDistance = b.distanceKm != null;
@@ -5393,7 +5411,16 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
         return a.index - b.index;
       })
       .map(({ auction }) => auction);
-  }, [combinedAuctions, locationRadiusKm, nearLat, nearLng, resolvedListingCoordinates]);
+  }, [
+    combinedAuctions,
+    locationRadiusKm,
+    nearLat,
+    nearLng,
+    resolvedListingCoordinates,
+    isLoadingMoreRemote,
+    isGeoRadiusRefreshing,
+    geoListingsFetchFailed,
+  ]);
 
   // La schimbarea filtrelor/căutării resetează la primele 30
   const filtersSignature = `${listingsScope}|${includeExecutariCrosslist ? 'exec-on' : 'exec-off'}|${selectedCategory}|${selectedCategories.join(',')}|${selectedSubcategory}|${selectedSubcategories.join(',')}|${selectedExecutariMainCategory}|${activeSelectedExecutariListCategories.join(',')}|${selectedLevel3}|${selectedPieseTipSlugs.join(',')}|${selectedSize}|${selectedSizes.join(',')}|${selectedBrand}|${selectedBrands.join(',')}|${selectedModel}|${selectedModels.join(',')}|${selectedColor}|${selectedColors.join(',')}|${JSON.stringify(priceRange)}|${location}|${selectedLocations.join(',')}|${condition}|${selectedConditions.join(',')}|${imageFilter}|${selectedSellerKinds.join(',')}|${sortBy}|${searchParams?.get?.('q') ?? ''}|r${locationRadiusKm}|${nearLat ?? ''}|${nearLng ?? ''}|free:${marketplaceFreeOnly ? '1' : '0'}`;
@@ -10130,7 +10157,15 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
                     </span>
                   ) : visibleDisplayedList.length === 0 ? (
                     <span className={isDarkMode ? 'text-sky-300' : 'text-sky-700'}>
-                      Căutăm cele mai apropiate rezultate…
+                      {isLoadingMoreRemote ||
+                      isGeoRadiusRefreshing ||
+                      isPageNavigating ||
+                      isRouteTransitionPending ||
+                      isOrchestratorLoading
+                        ? "Căutăm cele mai apropiate rezultate…"
+                        : hasGeoCenter
+                          ? `Nu am găsit anunțuri în raza de ${locationRadiusKm} km. Mărește raza din filtre sau alege „Toată România”.`
+                          : "Nu am găsit anunțuri pentru filtrele curente."}
                     </span>
                   ) : canShowStrictTotalSummary && selectedCategory !== 'all' ? (
                     <>
