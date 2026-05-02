@@ -44,6 +44,7 @@ function SheetContent({
   side = "right",
   hideClose = false,
   overlayClassName,
+  "aria-describedby": ariaDescribedBy,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left";
@@ -70,6 +71,7 @@ function SheetContent({
           className,
         )}
         {...props}
+        aria-describedby={ariaDescribedBy ?? undefined}
       >
         {children}
         {!hideClose && (
