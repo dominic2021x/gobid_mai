@@ -1,38 +1,72 @@
-/**
- * Query params forwarded from the /ro URL to GET /api/ro/listings (load more, parity with server query).
- */
-
 import {
-  RO_LISTINGS_SUPPORTED_PARAM_KEYS,
-  sanitizeRoListingsSearchParams,
-} from "./normalizedListingsQuery";
+  getListingsCachedFromFullSearchParams,
+  getListingsCountCachedFromFullSearchParams,
+} from "@/lib/ro/getListingsCached";
+import { loadPersonalizedRoHomePreview } from "@/lib/ro/personalizedRoHomePreview";
+import { getAppliedInternalLinksForSource } from "@/lib/growth/internalLinks";
+import { normalizeRoListingsRawSearchParams } from "@/lib/ro/normalizedListingsQuery";
+import { mergeDefaultRoListingsLimitForSsr } from "@/lib/ro/roListingsPagination";
+import { headers } from "next/headers";
+import { resolveAccess } from "@/lib/server/access/resolveAccess";
+import { serializeListingForClient } from "@/lib/ro/roListingsServerUtils";
+import { RoAuctionsViewClient } from "./RoAuctionsViewClient";
+import type { InitialListingsPayload } from "./types";
 
-/** Keys accepted by /api/ro/listings — do not forward unrelated URL noise. */
-export const LISTINGS_ALLOWED_KEYS = RO_LISTINGS_SUPPORTED_PARAM_KEYS;
+/**
+ * Server Component: sole caller of cached listings + count for /ro (full URL parity with /api/ro/listings).
+ * Client receives a JSON snapshot; infinite scroll appends via /api/ro/listings only.
+ */
+export default async function RoListServer({
+  searchParams,
+}: {
+  searchParams: Record<string, string | string[] | undefined>;
+}) {
+  const accessHeaders = await headers();
+  const searchParamsWithViewportLimit = mergeDefaultRoListingsLimitForSsr(
+    searchParams,
+    accessHeaders.get("user-agent"),
+  );
+  const normalized = normalizeRoListingsRawSearchParams(searchParamsWithViewportLimit);
+  /** Aceeași valoare ca în URL după sanitizare — evită mismatch hidratare la `useSearchParams()` în client. */
+  const initialMarketplaceQ = normalized.searchParams.get("q")?.trim() ?? "";
+  const access = await resolveAccess({ headers: accessHeaders } as Request);
 
-export function buildListingsApiParams(
-  sp: URLSearchParams,
-  from: number,
-  limit: number,
-  cursor?: string | null
-): URLSearchParams {
-  const params = new URLSearchParams();
-  const cleanedSource = sanitizeRoListingsSearchParams(sp);
-  if (cursor) {
-    params.set("cursor", cursor);
-    params.set("from", "0");
-  } else {
-    params.set("from", String(Math.max(0, from)));
-  }
-  params.set("limit", String(Math.min(100, Math.max(1, limit))));
-  for (const [k, v] of cleanedSource.entries()) {
-    if (!LISTINGS_ALLOWED_KEYS.has(k)) continue;
-    if (v == null || String(v).trim() === "") continue;
-    if (k === "from" || k === "limit" || k === "cursor") continue;
-    // Paginarea API folosește `from` + `limit`; `page` rămâne doar în URL-ul browserului.
-    // Altfel apar cereri gen from=54&page=2 — ambigue și pot încetini cache-ul / dedup-ul.
-    if (k === "page") continue;
-    params.set(k, v);
-  }
-  return params;
+  const page = normalized.query.page ?? 1;
+  const allowPersonalizedHome =
+    !normalized.hasFilters &&
+    (normalized.query.from ?? 0) === 0 &&
+    !normalized.query.listingsCursor &&
+    page <= 1;
+
+  const [result, resurseUtileLinks, totalCount, personalizedPreviewItems] = await Promise.all([
+    getListingsCachedFromFullSearchParams(searchParamsWithViewportLimit, access),
+    getAppliedInternalLinksForSource("/ro"),
+    getListingsCountCachedFromFullSearchParams(searchParamsWithViewportLimit, access).catch(() => undefined as undefined),
+    allowPersonalizedHome ? loadPersonalizedRoHomePreview(access) : Promise.resolve([] as Record<string, unknown>[]),
+  ]);
+
+  const plainItems = result.items.map(serializeListingForClient);
+  /** Do not use `result.totalMatched` for UI totals — Supabase scan can exit early (underestimate). */
+  const initialTotal = typeof totalCount === "number" ? totalCount : undefined;
+  const initialListings: InitialListingsPayload = {
+    items: plainItems,
+    nextFrom: result.nextFrom,
+    from: normalized.query.from ?? 0,
+    pageSize: normalized.query.limit,
+    nextCursor: result.nextCursor ?? null,
+    hasMore: result.hasMore,
+    ...(typeof initialTotal === "number" ? { totalCount: initialTotal } : {}),
+    source: "ssr",
+    ...(personalizedPreviewItems.length > 0
+      ? { personalizedHomePreview: { items: personalizedPreviewItems } }
+      : {}),
+  };
+
+  return (
+    <RoAuctionsViewClient
+      resurseUtileLinks={resurseUtileLinks}
+      initialListings={initialListings}
+      initialMarketplaceQ={initialMarketplaceQ}
+    />
+  );
 }
