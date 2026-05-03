@@ -1,6 +1,6 @@
 {
-  "name": "gobid.ro",
-  "version": "02_Mai",
+  "name": "licitatii",
+  "version": "backup_03_feb-01-14",
   "private": true,
   "engines": {
     "node": ">=20 <21"
