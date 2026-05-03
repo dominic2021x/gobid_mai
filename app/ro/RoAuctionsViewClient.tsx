@@ -2366,20 +2366,32 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     const locSingle = params.get("location");
     if (locSingle?.trim()) params.set("city", locSingle.trim());
     else params.delete("city");
-    params.delete("nearLat");
-    params.delete("nearLng");
+    /**
+     * Persist resolved coordinates in URL (4 decimals ≈ 11 m precision) so that:
+     *   - SSR can serve the same indexed-radius result on first paint
+     *   - `unstable_cache` / Upstash KV keys match across users with the same lat/lng/radius
+     *   - back/forward navigation restores the geo center without a 450ms re-geocode
+     * Previously these were always deleted, forcing every refetch to re-resolve.
+     */
+    const hasResolvedGeo =
+      nearLat != null &&
+      nearLng != null &&
+      Number.isFinite(nearLat) &&
+      Number.isFinite(nearLng);
+    if (hasResolvedGeo) {
+      params.set("nearLat", String(Number(nearLat!.toFixed(4))));
+      params.set("nearLng", String(Number(nearLng!.toFixed(4))));
+    } else {
+      params.delete("nearLat");
+      params.delete("nearLng");
+    }
     if (locationCenterFromGps) {
       params.set("location", getPublicLocationLabel(locationSearch));
       params.delete("locations");
       params.delete("city");
+      // GPS uses radius from state set elsewhere (clampRoRadiusKmForApi); do not duplicate here.
       params.delete("radiusKm");
-    } else if (
-        locationRadiusKm > 0 &&
-        nearLat != null &&
-        nearLng != null &&
-        Number.isFinite(nearLat) &&
-        Number.isFinite(nearLng)
-      ) {
+    } else if (locationRadiusKm > 0 && hasResolvedGeo) {
       params.set("radiusKm", String(Math.min(500, Math.max(1, Math.round(locationRadiusKm)))));
     } else {
       params.delete("radiusKm");
@@ -2824,8 +2836,19 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       }
       sp.set("sort", sortKeyToApiParam(sortBy));
       const params = buildListingsApiParams(sp, from, limit, cursor);
-      if (listingsUseServerGeoRadius) {
-        params.set("mode", "background");
+      /**
+       * Defer the total whenever any location filter is active: the indexed-radius RPC returns
+       * the page in a single round-trip; the count is fetched in parallel from /api/ro/listings-count.
+       * This is the same pattern /api/search/results uses (no inline count).
+       */
+      const hasLocationFilter =
+        Boolean(params.get("location")?.trim()) ||
+        Boolean(params.get("city")?.trim()) ||
+        Boolean(params.get("county")?.trim()) ||
+        Boolean(params.get("radiusKm")?.trim()) ||
+        Boolean(params.get("nearLat")?.trim());
+      if (listingsUseServerGeoRadius || hasLocationFilter) {
+        params.set("mode", "instant");
       }
       return fetchRoListingsJsonCached(`/api/ro/listings?${params.toString()}`, signal);
     },
@@ -2855,8 +2878,14 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       }
       sp.set("sort", sortKeyToApiParam(sortBy));
       const params = buildListingsApiParams(sp, from, limit, cursor);
-      if (listingsUseServerGeoRadius) {
-        params.set("mode", "background");
+      const hasLocationFilter =
+        Boolean(params.get("location")?.trim()) ||
+        Boolean(params.get("city")?.trim()) ||
+        Boolean(params.get("county")?.trim()) ||
+        Boolean(params.get("radiusKm")?.trim()) ||
+        Boolean(params.get("nearLat")?.trim());
+      if (listingsUseServerGeoRadius || hasLocationFilter) {
+        params.set("mode", "instant");
       }
       return fetchRoListingsJsonCached(`/api/ro/listings?${params.toString()}`, signal);
     },

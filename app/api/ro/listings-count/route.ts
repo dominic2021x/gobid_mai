@@ -45,10 +45,15 @@ export async function GET(request: NextRequest) {
       cacheKey + (exact ? ":exact" : ":estimate"),
       {
         ttlMs: LISTINGS_COUNT_CACHE_TTL_MS,
-        loader: async () =>
-          exact
-            ? { total: await countProducts(query, access), total_kind: "exact" }
-            : countProductsWithEstimateMeta(query, access),
+        loader: async () => {
+          if (exact) {
+            return { total: await countProducts(query, access), total_kind: "exact" };
+          }
+          // countProductsWithEstimateMeta returns { total, totalKind }; normalize to snake_case
+          // so the cached payload + response wire format are consistent ('estimate'|'capped'|'exact').
+          const meta = await countProductsWithEstimateMeta(query, access);
+          return { total: meta.total, total_kind: meta.totalKind };
+        },
       },
     );
 
@@ -58,10 +63,14 @@ export async function GET(request: NextRequest) {
     }
 
     const res = NextResponse.json(
-      { success: true, total: payload.total, ...(payload.total_kind ? { total_kind: payload.total_kind } : {}) },
+      {
+        success: true,
+        total: payload.total,
+        ...(payload.total_kind ? { total_kind: payload.total_kind, totalKind: payload.total_kind } : {}),
+      },
       { status: 200 },
     );
-    res.headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.headers.set("Cache-Control", "public, s-maxage=15, stale-while-revalidate=120");
     return res;
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unexpected error";

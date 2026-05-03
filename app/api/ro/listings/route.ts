@@ -58,7 +58,7 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const fresh = searchParams.get("fresh") === "1";
-    const mode =
+    const explicitMode =
       searchParams.get("mode") === "instant"
         ? "instant"
         : searchParams.get("mode") === "background"
@@ -71,6 +71,18 @@ export async function GET(request: NextRequest) {
     }
 
     const { query, hasFilters, cacheKey } = normalizeRoListingsSearchParams(searchParams);
+    /**
+     * Location-filtered first paint matches /api/search/results — return items+hasMore as fast as
+     * possible, defer the total. Client polls /api/ro/listings-count in parallel for the badge.
+     * This cuts first-paint to a single RPC even with city/county/radius filters.
+     */
+    const hasLocationFilter =
+      Boolean((query.county ?? "").trim()) ||
+      Boolean((query.city ?? "").trim()) ||
+      Boolean((query.location ?? "").trim()) ||
+      (typeof query.radius_km === "number" && Number.isFinite(query.radius_km) && query.radius_km > 0) ||
+      (typeof query.near_lat === "number" && Number.isFinite(query.near_lat));
+    const mode = explicitMode ?? (hasLocationFilter ? "instant" : null);
     const access = await resolveAccess(request);
 
     if (process.env.DEBUG_LISTINGS === "1") {
@@ -176,7 +188,9 @@ export async function GET(request: NextRequest) {
       "Cache-Control",
       fresh || isAuthenticated
         ? "private, no-store, no-cache, must-revalidate"
-        : "public, s-maxage=30, stale-while-revalidate=300",
+        : hasLocationFilter
+          ? "public, s-maxage=10, stale-while-revalidate=60"
+          : "public, s-maxage=30, stale-while-revalidate=300",
     );
     return response;
   } catch (error: unknown) {

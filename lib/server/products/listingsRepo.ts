@@ -1614,13 +1614,9 @@ function getEnterpriseScalarFilter(value: string | undefined): string | null {
 export function canUseEnterpriseSupabasePath(query: ProductQuery): boolean {
   if (!USE_PRODUCTS_CHANNEL) return false;
   if (query.listingsCursor) return false;
-  if (
-    query.radius_km != null ||
-    query.near_lat != null ||
-    query.near_lng != null
-  ) {
-    return false;
-  }
+  // Geo radius is now handled IN-DB by search_ro_listings_enterprise via earth_box / earth_distance
+  // (see migration 20260503180400). It used to escape the enterprise path and fall through to a
+  // 100k-row JS Haversine scan that took minutes; we intentionally route it through the RPC now.
   // Placeholder image URLs count as "without images" in the current JS matcher;
   // keep that edge case on the exact fallback path.
   if (query.images) return false;
@@ -1707,6 +1703,19 @@ export function buildEnterpriseRpcArgs(
     p_footwear_type: getEnterpriseScalarFilter(query.footwearType),
     p_accessory_type: getEnterpriseScalarFilter(query.accessoryType),
     p_sort: (query.sort ?? "newest").trim() || "newest",
+    // Indexed geo radius (Phase 1.5). RPC ignores all three when any is null/invalid.
+    p_near_lat:
+      typeof query.near_lat === "number" && Number.isFinite(query.near_lat) && Math.abs(query.near_lat) <= 90
+        ? query.near_lat
+        : null,
+    p_near_lng:
+      typeof query.near_lng === "number" && Number.isFinite(query.near_lng) && Math.abs(query.near_lng) <= 180
+        ? query.near_lng
+        : null,
+    p_radius_km:
+      typeof query.radius_km === "number" && Number.isFinite(query.radius_km) && query.radius_km > 0
+        ? query.radius_km
+        : null,
   };
 }
 

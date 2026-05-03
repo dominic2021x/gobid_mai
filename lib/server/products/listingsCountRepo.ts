@@ -266,7 +266,15 @@ export async function countProducts(query: ProductQueryStrict, access?: AccessCo
     builder = builder.ilike("city", `%${escapeIlike(city)}%`);
   }
 
-  if (loc) {
+  const hasGeoCenter =
+    typeof resolved.near_lat === "number" &&
+    typeof resolved.near_lng === "number" &&
+    typeof resolved.radius_km === "number" &&
+    Number.isFinite(resolved.near_lat) &&
+    Number.isFinite(resolved.near_lng) &&
+    Number.isFinite(resolved.radius_km) &&
+    resolved.radius_km > 0;
+  if (loc && !hasGeoCenter) {
     const locEsc = escapeIlike(loc);
     builder = builder.ilike("locality_search", `%${locEsc}%`);
   }

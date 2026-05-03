@@ -1362,6 +1362,8 @@ model products {
   city                          String?
   address                       String?
   coordinates                   Json?
+  geo_lat                       Float?                          @db.DoublePrecision
+  geo_lng                       Float?                          @db.DoublePrecision
   images                        Json?                           @default("[]")
   documents                     Json?                           @default("[]")
   custom_fields                 Json?                           @default("{}")

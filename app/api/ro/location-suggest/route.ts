@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Redis } from "@upstash/redis";
 import { searchRomaniaLocalitySuggestions } from "@/lib/maps/nominatim-search-suggest";
 import { checkRateLimit, getClientIp } from "@/lib/security/rateLimit";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -8,6 +9,19 @@ type LocationSuggestion = { label: string; lat: number; lon: number };
 const LOCATION_SUGGEST_CACHE_TTL_MS = 60 * 60 * 1000;
 const LOCATION_SUGGEST_CACHE_MAX_ENTRIES = 300;
 const locationSuggestCache = new Map<string, { suggestions: LocationSuggestion[]; ts: number }>();
+
+/** Global cross-instance cache (Upstash KV). Falls back to LRU when env is missing. */
+const KV_PREFIX = "ro:locsuggest:v1:";
+const KV_TTL_SEC = 24 * 60 * 60;
+
+function getKv(): Redis | null {
+  try {
+    if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) return null;
+    return Redis.fromEnv();
+  } catch {
+    return null;
+  }
+}
 
 function normalizeLocationQuery(value: string): string {
   return value
@@ -46,7 +60,8 @@ function setCachedSuggestions(key: string, suggestions: LocationSuggestion[]): v
 
 function withPublicCache(payload: unknown) {
   const response = NextResponse.json(payload);
-  response.headers.set("Cache-Control", "public, s-maxage=3600, stale-while-revalidate=86400");
+  // Suggestions for the same query string are stable for hours; let the CDN do the work.
+  response.headers.set("Cache-Control", "public, s-maxage=86400, stale-while-revalidate=604800");
   return response;
 }
 
@@ -105,10 +120,31 @@ export async function GET(request: NextRequest) {
     return withPublicCache({ ok: true, suggestions: cached, cached: true });
   }
 
+  const kv = getKv();
+  const kvKey = kv ? `${KV_PREFIX}${cacheKey}` : null;
+  if (kv && kvKey) {
+    try {
+      const hit = await kv.get<LocationSuggestion[]>(kvKey);
+      if (Array.isArray(hit) && hit.length > 0) {
+        setCachedSuggestions(cacheKey, hit);
+        return withPublicCache({ ok: true, suggestions: hit, cached: true, source: "kv" });
+      }
+    } catch {
+      // ignore KV errors
+    }
+  }
+
   const localSuggestions = await searchLocalityTable(q, 10);
   if (localSuggestions.length >= 5) {
     const suggestions = excludeMetropolitanZoneSuggestions(localSuggestions.slice(0, 10));
     setCachedSuggestions(cacheKey, suggestions);
+    if (kv && kvKey) {
+      try {
+        await kv.set(kvKey, suggestions, { ex: KV_TTL_SEC });
+      } catch {
+        // ignore
+      }
+    }
     return withPublicCache({ ok: true, suggestions, source: "localities" });
   }
 
@@ -125,5 +161,12 @@ export async function GET(request: NextRequest) {
     mergeSuggestions(localSuggestions, nominatimSuggestions, 10),
   );
   setCachedSuggestions(cacheKey, suggestions);
+  if (kv && kvKey && suggestions.length > 0) {
+    try {
+      await kv.set(kvKey, suggestions, { ex: KV_TTL_SEC });
+    } catch {
+      // ignore
+    }
+  }
   return withPublicCache({ ok: true, suggestions, source: localSuggestions.length > 0 ? "mixed" : "nominatim" });
 }

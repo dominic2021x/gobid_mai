@@ -42,6 +42,43 @@ function mergeSuggestions(api: ApiRow[], staticCityNames: string[]): Suggestion[
 
 const DEBOUNCE_MS = 360;
 
+/**
+ * SWR cache (sessionStorage) — same query string, same suggestions for 24h. Returns instantly
+ * on second keystroke / re-open and removes external Nominatim pressure during a session.
+ */
+const SUGGEST_CACHE_PREFIX = "roLocSuggest:v1:";
+const SUGGEST_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+type CachedSuggest = { suggestions: ApiRow[]; ts: number };
+
+function readCachedSuggestions(key: string): ApiRow[] | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(SUGGEST_CACHE_PREFIX + key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CachedSuggest;
+    if (!parsed || !Array.isArray(parsed.suggestions)) return null;
+    if (Date.now() - parsed.ts > SUGGEST_CACHE_TTL_MS) {
+      window.sessionStorage.removeItem(SUGGEST_CACHE_PREFIX + key);
+      return null;
+    }
+    return parsed.suggestions;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedSuggestions(key: string, suggestions: ApiRow[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(
+      SUGGEST_CACHE_PREFIX + key,
+      JSON.stringify({ suggestions, ts: Date.now() } satisfies CachedSuggest),
+    );
+  } catch {
+    // sessionStorage full / disabled — ignore.
+  }
+}
+
 export function LocationFilterAutocompleteInput({
   value,
   onChange,
@@ -91,7 +128,15 @@ export function LocationFilterAutocompleteInput({
       setLoading(false);
       return;
     }
-    setLoading(true);
+    const cacheKey = N(t);
+    const cached = readCachedSuggestions(cacheKey);
+    if (cached) {
+      // Render cached suggestions immediately; still revalidate in the background (SWR).
+      setApiRows(cached);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
     debounceRef.current = setTimeout(async () => {
       const my = (seqRef.current += 1);
       try {
@@ -100,11 +145,12 @@ export function LocationFilterAutocompleteInput({
         if (my !== seqRef.current) return;
         if (d?.ok && Array.isArray(d.suggestions)) {
           setApiRows(d.suggestions);
-        } else {
+          writeCachedSuggestions(cacheKey, d.suggestions);
+        } else if (!cached) {
           setApiRows([]);
         }
       } catch {
-        if (my === seqRef.current) setApiRows([]);
+        if (my === seqRef.current && !cached) setApiRows([]);
       } finally {
         if (my === seqRef.current) setLoading(false);
       }

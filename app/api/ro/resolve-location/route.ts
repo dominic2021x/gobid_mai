@@ -1,6 +1,40 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Redis } from "@upstash/redis";
 import { geocodeAddress, reverseGeocodeLatLng } from "@/lib/maps/geocode";
 import { supabaseAdmin } from "@/lib/supabase";
+
+/** Global geocode cache (Upstash KV) — resolved labels and reverse-geocoded coords are stable for days. */
+const KV_FWD_PREFIX = "ro:resolveloc:fwd:v1:";
+const KV_REV_PREFIX = "ro:resolveloc:rev:v1:";
+const KV_TTL_SEC = 7 * 24 * 60 * 60;
+
+type ResolveLocationPayload = {
+  ok: boolean;
+  lat?: number;
+  lng?: number;
+  formattedAddress?: string;
+  addressComponents?: Array<{ longName: string; shortName: string; types: string[] }>;
+  error?: string;
+};
+
+function getKv(): Redis | null {
+  try {
+    if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) return null;
+    return Redis.fromEnv();
+  } catch {
+    return null;
+  }
+}
+
+function withPublicCache(payload: ResolveLocationPayload, status = 200) {
+  const res = NextResponse.json(payload, { status });
+  if (payload.ok) {
+    res.headers.set("Cache-Control", "public, s-maxage=86400, stale-while-revalidate=604800");
+  } else {
+    res.headers.set("Cache-Control", "no-store");
+  }
+  return res;
+}
 
 const LOCAL_CITY_COORDS: Record<string, { city: string; county: string; lat: number; lng: number }> = {
   bucuresti: { city: "București", county: "București", lat: 44.4268, lng: 26.1025 },
@@ -96,26 +130,43 @@ export async function GET(request: NextRequest) {
   const sp = request.nextUrl.searchParams;
   const latRaw = sp.get("lat");
   const lngRaw = sp.get("lng");
+  const kv = getKv();
+
   if (latRaw != null && lngRaw != null && latRaw.length > 0 && lngRaw.length > 0) {
     const lat = parseFloat(latRaw);
     const lng = parseFloat(lngRaw);
-    if (Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
-      const result = await reverseGeocodeLatLng(lat, lng);
-      if (result.success) {
-        return NextResponse.json({
-          ok: true,
-          lat: result.lat,
-          lng: result.lng,
-          formattedAddress: result.formattedAddress,
-          addressComponents: result.addressComponents ?? [],
-        });
-      }
-      return NextResponse.json(
-        { ok: false, error: result.error ?? "Reverse geocoding eșuat" },
-        { status: 200 },
-      );
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      return NextResponse.json({ ok: false, error: "Coordonate invalide." }, { status: 400 });
     }
-    return NextResponse.json({ ok: false, error: "Coordonate invalide." }, { status: 400 });
+    /** Round to 4 decimals so nearby points share the same cache slot (~11m). */
+    const kvKey = `${KV_REV_PREFIX}${lat.toFixed(4)},${lng.toFixed(4)}`;
+    if (kv) {
+      try {
+        const hit = await kv.get<ResolveLocationPayload>(kvKey);
+        if (hit && hit.ok) return withPublicCache(hit);
+      } catch {
+        // ignore
+      }
+    }
+    const result = await reverseGeocodeLatLng(lat, lng);
+    if (result.success) {
+      const payload: ResolveLocationPayload = {
+        ok: true,
+        lat: result.lat,
+        lng: result.lng,
+        formattedAddress: result.formattedAddress,
+        addressComponents: result.addressComponents ?? [],
+      };
+      if (kv) {
+        try {
+          await kv.set(kvKey, payload, { ex: KV_TTL_SEC });
+        } catch {
+          // ignore
+        }
+      }
+      return withPublicCache(payload);
+    }
+    return withPublicCache({ ok: false, error: result.error ?? "Reverse geocoding eșuat" });
   }
 
   const qRaw = sp.get("q")?.trim() ?? "";
@@ -123,23 +174,45 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "Parametrul q este prea scurt." }, { status: 400 });
   }
   const q = stripRoMetropolitanZonePrefix(qRaw);
+  const kvKey = `${KV_FWD_PREFIX}${normalizeLocation(q)}`;
+  if (kv) {
+    try {
+      const hit = await kv.get<ResolveLocationPayload>(kvKey);
+      if (hit && hit.ok) return withPublicCache(hit);
+    } catch {
+      // ignore
+    }
+  }
+
   const fastResult = await resolveRomanianLocalityFast(q);
   if (fastResult) {
-    return NextResponse.json(fastResult);
+    if (kv) {
+      try {
+        await kv.set(kvKey, fastResult as ResolveLocationPayload, { ex: KV_TTL_SEC });
+      } catch {
+        // ignore
+      }
+    }
+    return withPublicCache(fastResult as ResolveLocationPayload);
   }
   const address = q.includes("România") || q.includes("Romania") ? q : `${q}, România`;
   const result = await geocodeAddress(address, false);
   if (!result.success) {
-    return NextResponse.json(
-      { ok: false, error: result.error ?? "Geocoding eșuat" },
-      { status: 200 },
-    );
+    return withPublicCache({ ok: false, error: result.error ?? "Geocoding eșuat" });
   }
-  return NextResponse.json({
+  const payload: ResolveLocationPayload = {
     ok: true,
     lat: result.lat,
     lng: result.lng,
     formattedAddress: result.formattedAddress,
     addressComponents: result.addressComponents ?? [],
-  });
+  };
+  if (kv) {
+    try {
+      await kv.set(kvKey, payload, { ex: KV_TTL_SEC });
+    } catch {
+      // ignore
+    }
+  }
+  return withPublicCache(payload);
 }
