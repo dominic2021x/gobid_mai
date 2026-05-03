@@ -61,11 +61,34 @@ from public.search_ro_listings_enterprise(
   p_radius_km   => 50
 );
 
+-- 3b) Same RPC, center only (no radius) — „Toată țara”: fără cutoff geo, sort după distanță + NULLS LAST.
+--     Planul așteaptă sort pe earth_distance fără Bitmap Heap pe GiST (cutoff-ul lipsește).
+explain (analyze, buffers, format text)
+select id, title, city, county, geo_lat, geo_lng
+from public.search_ro_listings_enterprise(
+  p_limit       => 25,
+  p_near_lat    => 44.4268,
+  p_near_lng    => 26.1025,
+  p_radius_km   => null
+);
+
 -- 4) Approval column / index sanity
 select count(*) filter (where approval_normalized = 'approved') as approved,
        count(*) filter (where approval_normalized is null)      as null_norm,
        count(*) as total
 from public.products;
+
+-- 5) Acoperire geo după trigger + backfill ro_localities (țintă: >80% din rândurile cu city setat)
+select
+  count(*) filter (where city is not null and trim(city) <> '') as products_with_city,
+  count(*) filter (where city is not null and trim(city) <> '' and geo_lat is not null) as with_geo,
+  round(
+    100.0 * count(*) filter (where city is not null and trim(city) <> '' and geo_lat is not null)
+    / nullif(count(*) filter (where city is not null and trim(city) <> ''), 0),
+    1
+  ) as pct_geo_among_city_rows
+from public.products
+where status <> 'deleted';
 
 select indexrelname, idx_scan, idx_tup_read
 from pg_stat_user_indexes
@@ -75,4 +98,31 @@ where indexrelname in (
   'products_locality_search_trgm_hot_idx',
   'products_city_trgm_hot_idx',
   'products_county_trgm_hot_idx'
+);
+
+-- 6) resolve_ro_locality_center (Chiajna + Ilfov) — trebuie să returneze un rând exact/fuzzy
+select * from public.resolve_ro_locality_center('chiajna', 'ilfov');
+
+-- 7) Acoperire geo pe județ (după migrația de backfill din ro_localities)
+select
+  coalesce(nullif(trim(county), ''), '(lipsă)') as county,
+  count(*) as total,
+  count(geo_lat) as with_geo,
+  round(100.0 * count(geo_lat) / nullif(count(*), 0), 1) as pct_with_geo
+from public.products
+where status <> 'deleted'
+  and city is not null
+  and trim(city) <> ''
+group by 1
+order by total desc
+limit 25;
+
+-- 8) RPC cu centrul Chiajna, fără rază (parity cu /ro?location=Chiajna,Ilfov după enrich server)
+explain (analyze, buffers, format text)
+select id, title, city, county, geo_lat, geo_lng
+from public.search_ro_listings_enterprise(
+  p_limit       => 24,
+  p_near_lat    => (select latitude from public.resolve_ro_locality_center('chiajna', 'ilfov') limit 1),
+  p_near_lng    => (select longitude from public.resolve_ro_locality_center('chiajna', 'ilfov') limit 1),
+  p_radius_km   => null
 );

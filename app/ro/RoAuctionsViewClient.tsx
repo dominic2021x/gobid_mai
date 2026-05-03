@@ -48,7 +48,7 @@ import { getFocalForImageUrl } from "@/lib/image/focal-from-product";
 import { ProgressiveImage } from "@/components/image/ProgressiveImage";
 import { notifyGuestFavoritesUpdated } from "@/lib/favorites/mergeGuestFavorites";
 import SearchRecoveryCard from "@/components/ro/SearchRecoveryCard";
-import { buildListingsApiParams } from "@/lib/ro/roListingsApiParams";
+import { applyRoListingsFetchLocationMode, buildListingsApiParams } from "@/lib/ro/roListingsApiParams";
 import { normalizeRoListingsSortKey, sortKeyToApiParam } from "@/lib/ro/roListingsSortParam";
 import { stripBrandTokensFromSearchQuery } from "@/lib/listings/filters/searchQueryBrand";
 import type { InitialListingsPayload, ResurseUtileLinkItem } from "./types";
@@ -152,7 +152,7 @@ function normalizeLocationQueryDedupeKey(q: string): string {
     .replace(/\s+/g, " ");
 }
 
-/** Aliniat cu slider-ul / API: fără asta, `nearLat`/`nearLng` fără `radiusKm` → fără filtru Haversine pe server. */
+/** Rază strictă pentru RPC (1–500 km). Nu folosi pentru `locationRadiusKm === 0` („Toată țara”). */
 function clampRoRadiusKmForApi(km: number): number {
   return Math.min(500, Math.max(1, Math.round(Number.isFinite(km) ? km : 25)));
 }
@@ -715,6 +715,8 @@ type RoListingsResponse = {
   total?: number;
   /** Aliniat cu `count_ro_listings_enterprise_estimate` — `exact` | `estimate` | `capped`. */
   total_kind?: "exact" | "estimate" | "capped";
+  /** Server poate injecta centrul din text locație (distance-first fără geocode client). */
+  resolved_center?: { lat: number; lng: number; match: string };
   error?: string;
 };
 
@@ -796,31 +798,47 @@ async function fetchRoListingsJsonCached(url: string, signal?: AbortSignal): Pro
     }
   }
 
-  let promise = roListingsInFlight.get(url);
-  if (!promise) {
-    promise = fetch(url, {
-      method: "GET",
-      cache: "no-store",
-      signal,
-    }).then(async (res) => {
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(text || `HTTP ${res.status}`);
-      }
-      const payload = (await res.json()) as RoListingsResponse;
-      setRoListingsClientCache(url, payload);
-      return payload;
-    });
-    roListingsInFlight.set(url, promise);
-    promise.then(
-      () => roListingsInFlight.delete(url),
-      () => roListingsInFlight.delete(url),
-    );
-  }
+  /**
+   * In-flight dedupe shares one `fetch()` per URL. If another caller aborts that fetch,
+   * waiters with a still-live signal must start a fresh request (otherwise NS_BINDING_ABORTED
+   * leaves the UI stuck or empty).
+   */
+  for (;;) {
+    if (signal?.aborted) throw createAbortError();
 
-  const payload = await promise;
-  if (signal?.aborted) throw createAbortError();
-  return payload;
+    let promise = roListingsInFlight.get(url);
+    if (!promise) {
+      promise = fetch(url, {
+        method: "GET",
+        cache: "no-store",
+        signal,
+      }).then(async (res) => {
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(text || `HTTP ${res.status}`);
+        }
+        const payload = (await res.json()) as RoListingsResponse;
+        setRoListingsClientCache(url, payload);
+        return payload;
+      });
+      roListingsInFlight.set(url, promise);
+      promise.then(
+        () => roListingsInFlight.delete(url),
+        () => roListingsInFlight.delete(url),
+      );
+    }
+
+    try {
+      const payload = await promise;
+      if (signal?.aborted) throw createAbortError();
+      return payload;
+    } catch (e) {
+      const isAbort = e instanceof Error && e.name === "AbortError";
+      if (isAbort && signal?.aborted) throw e;
+      if (isAbort) continue;
+      throw e;
+    }
+  }
 }
 
 interface AuctionsPageContentProps {
@@ -1158,7 +1176,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     setPriceRange({ min: getParam('priceMin'), max: getParam('priceMax') });
     const loc = getParam('location') || getParam('city');
     const rkRaw = parseFloat(getParam('radiusKm') || '');
-    const parsedRadiusKm = Number.isFinite(rkRaw) && rkRaw > 0 && rkRaw <= 500 ? Math.round(rkRaw) : 25;
+    const parsedRadiusKm = Number.isFinite(rkRaw) && rkRaw > 0 && rkRaw <= 500 ? Math.round(rkRaw) : 0;
     setLocationRadiusKm(parsedRadiusKm);
     setRemoteLocationRadiusKm(parsedRadiusKm);
     {
@@ -1186,6 +1204,14 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       } else {
         setLocation(loc || 'all');
         setSelectedLocations(locationsParam.length > 0 ? locationsParam : (loc ? [loc] : []));
+      }
+    }
+    {
+      const nLatRaw = parseFloat(getParam("nearLat") || "");
+      const nLngRaw = parseFloat(getParam("nearLng") || "");
+      if (Number.isFinite(nLatRaw) && Number.isFinite(nLngRaw)) {
+        setNearLat(nLatRaw);
+        setNearLng(nLngRaw);
       }
     }
     const cond = getParam('condition');
@@ -1402,10 +1428,14 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
   const [viewportIsMdUp, setViewportIsMdUp] = useState<boolean | null>(null);
   const [locationSearch, setLocationSearch] = useState('');
   /** Rază km față de centrul intern; coordonatele rămân în state/localStorage, nu în URL-ul public. */
-  const [locationRadiusKm, setLocationRadiusKm] = useState<number>(25);
-  const [remoteLocationRadiusKm, setRemoteLocationRadiusKm] = useState<number>(25);
-  const [nearLat, setNearLat] = useState<number | null>(null);
-  const [nearLng, setNearLng] = useState<number | null>(null);
+  const [locationRadiusKm, setLocationRadiusKm] = useState<number>(0);
+  const [remoteLocationRadiusKm, setRemoteLocationRadiusKm] = useState<number>(0);
+  const [nearLat, setNearLat] = useState<number | null>(() =>
+    typeof initialListings?.resolvedCenter?.lat === "number" ? initialListings.resolvedCenter.lat : null,
+  );
+  const [nearLng, setNearLng] = useState<number | null>(() =>
+    typeof initialListings?.resolvedCenter?.lng === "number" ? initialListings.resolvedCenter.lng : null,
+  );
   const [resolvedListingCoordinates, setResolvedListingCoordinates] = useState<Record<string, { lat: number; lng: number }>>({});
   const listingCoordResolveRunRef = useRef(0);
   /** Query-uri geocode eșuate — nu reîncerca la infinit (blochează CPU/rețea). */
@@ -1527,8 +1557,8 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       setLocation("all");
       setSelectedLocations([]);
       setLocationSearch("Toată România");
-      setLocationRadiusKm(25);
-      setRemoteLocationRadiusKm(25);
+      setLocationRadiusKm(0);
+      setRemoteLocationRadiusKm(0);
       clearStoredLocationCenter();
 
       if (typeof window !== "undefined") {
@@ -2379,8 +2409,8 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       Number.isFinite(nearLat) &&
       Number.isFinite(nearLng);
     if (hasResolvedGeo) {
-      params.set("nearLat", String(Number(nearLat!.toFixed(4))));
-      params.set("nearLng", String(Number(nearLng!.toFixed(4))));
+      params.set("nearLat", String(Number(nearLat!.toFixed(3))));
+      params.set("nearLng", String(Number(nearLng!.toFixed(3))));
     } else {
       params.delete("nearLat");
       params.delete("nearLng");
@@ -2580,6 +2610,8 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
   }, [listingsScope, includeExecutariCrosslist, selectedCategory, selectedSubcategory, selectedCategories, selectedSubcategories, selectedExecutariMainCategory, selectedExecutariListCategory, selectedExecutariListCategories, selectedLevel3, selectedPieseTipSlugs, selectedSize, selectedBrand, selectedModel, selectedColor, selectedSizes, selectedBrands, selectedModels, selectedColors, priceRange, location, condition, selectedLocations, selectedConditions, imageFilter, selectedSellerKinds, detailedFilters, selectedCurrency, sortBy, marketplaceFreeOnly, syncAllFiltersToUrl, mounted, searchQ, searchAnalysis?.categoryKey, searchAnalysis?.subcategoryKey, locationRadiusKm, nearLat, nearLng, searchParamsString]);
 
   const locationGeocodeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Debounce geocode mai scurt = mai puțin timp în «fără coordonate» și mai puține cereri duplicate. */
+  const LOCATION_GEOCODE_DEBOUNCE_MS = 220;
   useEffect(() => {
     const singleLabel =
       selectedLocations.length === 1
@@ -2591,6 +2623,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       setLocationCenterFromGps(false);
       setNearLat(null);
       setNearLng(null);
+      setLocationGeocodeBusy(false);
       return;
     }
     if (!singleLabel?.trim()) {
@@ -2599,13 +2632,14 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       }
       setNearLat(null);
       setNearLng(null);
+      setLocationGeocodeBusy(false);
       return;
     }
+    setLocationGeocodeBusy(true);
+    setLocationCenterFromGps(false);
     if (locationGeocodeTimerRef.current) clearTimeout(locationGeocodeTimerRef.current);
     locationGeocodeTimerRef.current = setTimeout(() => {
       void (async () => {
-        setLocationGeocodeBusy(true);
-        setLocationCenterFromGps(false);
         try {
           const res = await fetch(
             `/api/ro/resolve-location?q=${encodeURIComponent(stripMetropolitanZoneFromLocationQuery(singleLabel.trim()))}`,
@@ -2628,6 +2662,14 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
               publicLabel,
               ts: Date.now(),
             });
+            if (typeof window !== "undefined") {
+              startRouteTransition(() => {
+                const params = new URLSearchParams(window.location.search);
+                params.set("nearLat", String(Number(data.lat!.toFixed(3))));
+                params.set("nearLng", String(Number(data.lng!.toFixed(3))));
+                router.replace(`/ro?${params.toString()}`, { scroll: false });
+              });
+            }
           } else {
             setNearLat(null);
             setNearLng(null);
@@ -2639,11 +2681,11 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
           setLocationGeocodeBusy(false);
         }
       })();
-    }, 450);
+    }, LOCATION_GEOCODE_DEBOUNCE_MS);
     return () => {
       if (locationGeocodeTimerRef.current) clearTimeout(locationGeocodeTimerRef.current);
     };
-  }, [selectedLocations, location, locationCenterFromGps]);
+  }, [selectedLocations, location, locationCenterFromGps, router, startRouteTransition]);
 
   // Search orchestrator: plan din AI (normalizedQuery + proposedFilters + steps).
   // Pentru auto-relax la 0 rezultate: aplică plan.steps[1].listingsQuery și adaugă relaxed=1 în URL;
@@ -2773,32 +2815,28 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
   );
 
   useEffect(() => {
-    const nextRadius = Math.min(500, Math.max(1, Math.round(locationRadiusKm)));
+    const clamped =
+      locationRadiusKm <= 0 ? 0 : Math.min(500, Math.max(1, Math.round(locationRadiusKm)));
     if (nearLat == null || nearLng == null || !Number.isFinite(nearLat) || !Number.isFinite(nearLng)) {
-      setRemoteLocationRadiusKm(nextRadius);
+      setRemoteLocationRadiusKm(clamped);
       setIsGeoRadiusRefreshing(false);
       return;
     }
     setIsGeoRadiusRefreshing(true);
     const timer = window.setTimeout(() => {
-      setRemoteLocationRadiusKm(nextRadius);
+      setRemoteLocationRadiusKm(clamped);
     }, 220);
     return () => window.clearTimeout(timer);
   }, [locationRadiusKm, nearLat, nearLng]);
 
-  /**
-   * Filtru strict pe rază în API (șterge location/city din query) doar pentru GPS / „Locația mea”.
-   * Pentru oraș selectat manual, geocodarea setează nearLat/Lng doar pentru sortare după distanță în UI —
-   * dacă am trimite și radius la API, am înlocui locality_search (SSR) cu Haversine și lista „dispare”.
-   */
-  const listingsUseServerGeoRadius = useMemo(
+  /** Avem centru valid (GPS sau oraș geocodat): API sortează după distanță; raza e opțională (cutoff). */
+  const listingsHasGeoCenter = useMemo(
     () =>
-      locationCenterFromGps &&
       nearLat != null &&
       nearLng != null &&
       Number.isFinite(nearLat) &&
       Number.isFinite(nearLng),
-    [locationCenterFromGps, nearLat, nearLng],
+    [nearLat, nearLng],
   );
 
   // Listare și load more: parametri din URL + scope din state (ca checkbox-urile scope să aibă efect imediat).
@@ -2824,15 +2862,15 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       } else {
         sp.delete("includeExecutari");
       }
-      if (listingsUseServerGeoRadius) {
-        sp.set("nearLat", String(Number(nearLat!.toFixed(6))));
-        sp.set("nearLng", String(Number(nearLng!.toFixed(6))));
-        // Fast geo mode: show nearest listings immediately instead of scanning a strict radius first.
-        sp.delete("location");
-        sp.delete("locations");
-        sp.delete("city");
-        sp.delete("radiusKm");
-        sp.set("radiusKm", String(clampRoRadiusKmForApi(remoteLocationRadiusKm)));
+      applyRoListingsFetchLocationMode(sp, listingsHasGeoCenter ? "geo" : "location");
+      if (listingsHasGeoCenter) {
+        sp.set("nearLat", String(Number(nearLat!.toFixed(3))));
+        sp.set("nearLng", String(Number(nearLng!.toFixed(3))));
+        if (locationRadiusKm > 0) {
+          sp.set("radiusKm", String(clampRoRadiusKmForApi(remoteLocationRadiusKm)));
+        } else {
+          sp.delete("radiusKm");
+        }
       }
       sp.set("sort", sortKeyToApiParam(sortBy));
       const params = buildListingsApiParams(sp, from, limit, cursor);
@@ -2847,12 +2885,25 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
         Boolean(params.get("county")?.trim()) ||
         Boolean(params.get("radiusKm")?.trim()) ||
         Boolean(params.get("nearLat")?.trim());
-      if (listingsUseServerGeoRadius || hasLocationFilter) {
+      if (listingsHasGeoCenter || hasLocationFilter) {
         params.set("mode", "instant");
+      }
+      if (process.env.NODE_ENV === "development" && typeof window !== "undefined") {
+        console.info("[ro/listings] fetch", `${window.location.origin}/api/ro/listings?${params.toString()}`);
       }
       return fetchRoListingsJsonCached(`/api/ro/listings?${params.toString()}`, signal);
     },
-    [searchParams, listingsScope, includeExecutariCrosslist, listingsUseServerGeoRadius, nearLat, nearLng, remoteLocationRadiusKm, sortBy]
+    [
+      searchParams,
+      listingsScope,
+      includeExecutariCrosslist,
+      listingsHasGeoCenter,
+      nearLat,
+      nearLng,
+      remoteLocationRadiusKm,
+      locationRadiusKm,
+      sortBy,
+    ]
   );
 
   /** Același contract ca fetchRoListingsPage, dar fără radiusKm — completare când rază strictă returnează 0 rezultate. */
@@ -2868,13 +2919,10 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
         sp.delete("includeExecutari");
       }
       sp.delete("radiusKm");
-      sp.delete("locations");
-      if (listingsUseServerGeoRadius) {
-        sp.set("nearLat", String(Number(nearLat!.toFixed(6))));
-        sp.set("nearLng", String(Number(nearLng!.toFixed(6))));
-        // Pentru fallback „cele mai apropiate”, nu mai limităm la localitatea selectată.
-        sp.delete("location");
-        sp.delete("city");
+      applyRoListingsFetchLocationMode(sp, listingsHasGeoCenter ? "geo" : "location");
+      if (listingsHasGeoCenter) {
+        sp.set("nearLat", String(Number(nearLat!.toFixed(3))));
+        sp.set("nearLng", String(Number(nearLng!.toFixed(3))));
       }
       sp.set("sort", sortKeyToApiParam(sortBy));
       const params = buildListingsApiParams(sp, from, limit, cursor);
@@ -2884,12 +2932,12 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
         Boolean(params.get("county")?.trim()) ||
         Boolean(params.get("radiusKm")?.trim()) ||
         Boolean(params.get("nearLat")?.trim());
-      if (listingsUseServerGeoRadius || hasLocationFilter) {
+      if (listingsHasGeoCenter || hasLocationFilter) {
         params.set("mode", "instant");
       }
       return fetchRoListingsJsonCached(`/api/ro/listings?${params.toString()}`, signal);
     },
-    [searchParams, listingsScope, includeExecutariCrosslist, listingsUseServerGeoRadius, nearLat, nearLng, sortBy]
+    [searchParams, listingsScope, includeExecutariCrosslist, listingsHasGeoCenter, nearLat, nearLng, sortBy]
   );
 
   const fetchRoListingsPageRef = useRef(fetchRoListingsPage);
@@ -2910,9 +2958,22 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
   const roPaginationFiltersSignature = useMemo(
     () =>
       `${filtersSignatureFromUrl}|geo:${
-        listingsUseServerGeoRadius ? `${nearLat ?? ""}:${nearLng ?? ""}` : ""
-      }|r${listingsUseServerGeoRadius ? clampRoRadiusKmForApi(remoteLocationRadiusKm) : ""}`,
-    [filtersSignatureFromUrl, listingsUseServerGeoRadius, nearLat, nearLng, remoteLocationRadiusKm],
+        listingsHasGeoCenter ? `${nearLat ?? ""}:${nearLng ?? ""}` : ""
+      }|r${
+        listingsHasGeoCenter && locationRadiusKm > 0
+          ? clampRoRadiusKmForApi(remoteLocationRadiusKm)
+          : listingsHasGeoCenter
+            ? "0"
+            : ""
+      }`,
+    [
+      filtersSignatureFromUrl,
+      listingsHasGeoCenter,
+      nearLat,
+      nearLng,
+      remoteLocationRadiusKm,
+      locationRadiusKm,
+    ],
   );
 
   const personalizedHomeItems = initialListings?.personalizedHomePreview?.items ?? [];
@@ -3004,18 +3065,29 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
 
       // Prefetch: același URL API ca după router.replace → la primul render cu noul `searchParams`,
       // fetchRoListingsJsonCached lovește cache / promise în zbor → paginare mult mai „instant”.
-      paginationPrefetchAbortRef.current?.abort();
-      const prefetchAc = new AbortController();
-      paginationPrefetchAbortRef.current = prefetchAc;
-      void fetchRoListingsPage(nextOffset, listingsPageSize, cursorForSequentialNext, prefetchAc.signal, sp).catch(() => {
-        // Abort la click rapid sau rețea: efectul principal reia încărcarea.
-      });
+      if (!locationGeocodeBusy) {
+        paginationPrefetchAbortRef.current?.abort();
+        const prefetchAc = new AbortController();
+        paginationPrefetchAbortRef.current = prefetchAc;
+        void fetchRoListingsPage(nextOffset, listingsPageSize, cursorForSequentialNext, prefetchAc.signal, sp).catch(() => {
+          // Abort la click rapid sau rețea: efectul principal reia încărcarea.
+        });
+      }
 
       startRouteTransition(() => {
         router.replace(qs ? `/ro?${qs}` : "/ro", { scroll: false });
       });
     },
-    [fetchRoListingsPage, listingsPageSize, listingsUrlPage, nextRemoteCursor, router, searchParams, startRouteTransition],
+    [
+      fetchRoListingsPage,
+      listingsPageSize,
+      listingsUrlPage,
+      nextRemoteCursor,
+      router,
+      searchParams,
+      startRouteTransition,
+      locationGeocodeBusy,
+    ],
   );
 
   const prefetchListingsPageHover = useCallback(
@@ -3039,11 +3111,12 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (locationGeocodeBusy) return;
     const p = listingsUrlPage;
     for (const n of [p - 1, p + 1]) {
       if (n >= 1 && n <= RO_LISTINGS_MAX_PAGE) prefetchListingsPageHover(n);
     }
-  }, [listingsUrlPage, prefetchListingsPageHover]);
+  }, [listingsUrlPage, prefetchListingsPageHover, locationGeocodeBusy]);
 
   useEffect(() => {
     if (pendingPage == null) return;
@@ -3107,9 +3180,12 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
   }, []);
 
   const activeExactRequestIdRef = useRef(0);
+  /** Debounce client refetch after URL settles so sync + resolve-location coalesce into one `/api/ro/listings` call. */
+  const LISTINGS_MAIN_FETCH_DEBOUNCE_MS = 250;
+  const listingsMainFetchDebounceTimerRef = useRef<number | null>(null);
+  const listingsMainFetchAbortRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
-    const controller = new AbortController();
-    const requestId = ++activeExactRequestIdRef.current;
     const firstPage = initialListings?.items || [];
     const firstPageFiltered = filterRows(firstPage);
     const urlSortNorm = normalizeRoListingsSortKey(searchParams?.get("sort"));
@@ -3120,22 +3196,44 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     const sortMatchesSnapshot =
       initialListings == null ||
       (snapshotSortFromServer === urlSortNorm && sortBy === urlSortNorm);
+    const ssrResolved = initialListings?.resolvedCenter;
+    const hasClientGeo =
+      nearLat != null &&
+      nearLng != null &&
+      Number.isFinite(nearLat) &&
+      Number.isFinite(nearLng);
+    const ssrGeoMatches =
+      !hasClientGeo ||
+      (ssrResolved != null &&
+        Math.abs(nearLat! - ssrResolved.lat) < 0.001 &&
+        Math.abs(nearLng! - ssrResolved.lng) < 0.001);
     const canUseServerSnapshot =
       initialListings != null &&
       sortMatchesSnapshot &&
-      !listingsUseServerGeoRadius &&
+      ssrGeoMatches &&
       listingsOffsetForFetch === (initialListings?.from ?? 0) &&
       listingsPageSize === serverSnapshotLimit;
 
-    const commitExactPayload = (payload: {
-      items?: Record<string, unknown>[];
-      total?: number;
-      total_kind?: "exact" | "estimate" | "capped";
-      nextFrom?: number;
-      nextCursor?: string | null;
-      hasMore?: boolean;
-    }) => {
+    /** În timpul geocode-ului client (`resolve-location`) nu folosim snapshot SSR — așteptăm coordonate stabile. */
+    const shouldUseServerSnapshot = canUseServerSnapshot && !locationGeocodeBusy;
+
+    const commitExactPayload = (
+      requestId: number,
+      payload: {
+        items?: Record<string, unknown>[];
+        total?: number;
+        total_kind?: "exact" | "estimate" | "capped";
+        nextFrom?: number;
+        nextCursor?: string | null;
+        hasMore?: boolean;
+        resolved_center?: { lat: number; lng: number; match: string };
+      },
+    ) => {
       if (activeExactRequestIdRef.current !== requestId) return;
+      if (payload.resolved_center && typeof payload.resolved_center.lat === "number") {
+        setNearLat(payload.resolved_center.lat);
+        setNearLng(payload.resolved_center.lng);
+      }
       const page = Array.isArray(payload.items) ? payload.items : [];
       setRealProducts(filterRows(page));
       if (typeof payload.total === "number") {
@@ -3148,51 +3246,94 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       setHasMoreRemote(!!payload.hasMore);
     };
 
-    if (canUseServerSnapshot) {
-      if (activeExactRequestIdRef.current === requestId) {
-        setRealProducts(firstPageFiltered);
-        setNextRemoteFrom(typeof initialListings?.nextFrom === "number" ? initialListings.nextFrom : firstPage.length);
-        setNextRemoteCursor(initialListings?.nextCursor ?? null);
-        setHasMoreRemote(initialListings?.hasMore ?? true);
+    if (shouldUseServerSnapshot) {
+      if (listingsMainFetchDebounceTimerRef.current) {
+        clearTimeout(listingsMainFetchDebounceTimerRef.current);
+        listingsMainFetchDebounceTimerRef.current = null;
       }
+      listingsMainFetchAbortRef.current?.abort();
+      activeExactRequestIdRef.current += 1;
+      setRealProducts(firstPageFiltered);
+      setNextRemoteFrom(typeof initialListings?.nextFrom === "number" ? initialListings.nextFrom : firstPage.length);
+      setNextRemoteCursor(initialListings?.nextCursor ?? null);
+      setHasMoreRemote(initialListings?.hasMore ?? true);
       setIsLoadingMoreRemote(false);
       setIsGeoRadiusRefreshing(false);
-      return () => controller.abort();
+      return;
     }
 
-    setIsLoadingMoreRemote(true);
-    setIsGeoRadiusRefreshing(listingsUseServerGeoRadius);
-    setGeoListingsFetchFailed(false);
-    const loadCurrentPage = async () => {
-      try {
-        const cursorForCurrentPage = pendingListingsPageCursorRef.current;
-        pendingListingsPageCursorRef.current = null;
-        const payload = await fetchRoListingsPageRef.current(
-          listingsOffsetForFetch,
-          listingsPageSize,
-          cursorForCurrentPage,
-          controller.signal,
-        );
-        if (controller.signal.aborted) return;
-        if (!payload.success) {
-          setGeoListingsFetchFailed(true);
-          return;
-        }
-        setGeoListingsFetchFailed(false);
-        commitExactPayload(payload);
-      } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") return;
-        setGeoListingsFetchFailed(true);
-        console.error("Error loading products page:", error);
-      } finally {
-        if (!controller.signal.aborted && activeExactRequestIdRef.current === requestId) {
-          setIsLoadingMoreRemote(false);
-          setIsGeoRadiusRefreshing(false);
-        }
+    if (locationGeocodeBusy) {
+      if (listingsMainFetchDebounceTimerRef.current) {
+        clearTimeout(listingsMainFetchDebounceTimerRef.current);
+        listingsMainFetchDebounceTimerRef.current = null;
       }
+      listingsMainFetchAbortRef.current?.abort();
+      setIsLoadingMoreRemote(false);
+      setIsGeoRadiusRefreshing(false);
+      return () => {
+        if (listingsMainFetchDebounceTimerRef.current) {
+          clearTimeout(listingsMainFetchDebounceTimerRef.current);
+          listingsMainFetchDebounceTimerRef.current = null;
+        }
+        listingsMainFetchAbortRef.current?.abort();
+      };
+    }
+
+    if (listingsMainFetchDebounceTimerRef.current) {
+      clearTimeout(listingsMainFetchDebounceTimerRef.current);
+      listingsMainFetchDebounceTimerRef.current = null;
+    }
+    listingsMainFetchAbortRef.current?.abort();
+
+    listingsMainFetchDebounceTimerRef.current = window.setTimeout(() => {
+      listingsMainFetchDebounceTimerRef.current = null;
+      const requestId = ++activeExactRequestIdRef.current;
+      const fetchAc = new AbortController();
+      listingsMainFetchAbortRef.current = fetchAc;
+      setIsLoadingMoreRemote(true);
+      setIsGeoRadiusRefreshing(listingsHasGeoCenter);
+      setGeoListingsFetchFailed(false);
+
+      const loadCurrentPage = async () => {
+        try {
+          const cursorForCurrentPage = pendingListingsPageCursorRef.current;
+          pendingListingsPageCursorRef.current = null;
+          const payload = await fetchRoListingsPageRef.current(
+            listingsOffsetForFetch,
+            listingsPageSize,
+            cursorForCurrentPage,
+            fetchAc.signal,
+          );
+          if (fetchAc.signal.aborted) return;
+          if (activeExactRequestIdRef.current !== requestId) return;
+          if (!payload.success) {
+            setGeoListingsFetchFailed(true);
+            return;
+          }
+          setGeoListingsFetchFailed(false);
+          commitExactPayload(requestId, payload);
+        } catch (error) {
+          if (error instanceof Error && error.name === "AbortError") return;
+          if (activeExactRequestIdRef.current !== requestId) return;
+          setGeoListingsFetchFailed(true);
+          console.error("Error loading products page:", error);
+        } finally {
+          if (!fetchAc.signal.aborted && activeExactRequestIdRef.current === requestId) {
+            setIsLoadingMoreRemote(false);
+            setIsGeoRadiusRefreshing(false);
+          }
+        }
+      };
+      void loadCurrentPage();
+    }, LISTINGS_MAIN_FETCH_DEBOUNCE_MS);
+
+    return () => {
+      if (listingsMainFetchDebounceTimerRef.current) {
+        clearTimeout(listingsMainFetchDebounceTimerRef.current);
+        listingsMainFetchDebounceTimerRef.current = null;
+      }
+      listingsMainFetchAbortRef.current?.abort();
     };
-    void loadCurrentPage();
-    return () => controller.abort();
   }, [
     filtersSignatureFromUrl,
     filterRows,
@@ -3200,14 +3341,18 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     listingsOffsetForFetch,
     listingsPageSize,
     serverSnapshotLimit,
-    listingsUseServerGeoRadius,
+    listingsHasGeoCenter,
     remoteLocationRadiusKm,
+    locationRadiusKm,
     sortBy,
     searchParams,
+    nearLat,
+    nearLng,
+    locationGeocodeBusy,
   ]);
 
   useEffect(() => {
-    if (!mounted || !hasMoreRemote || isLoadingMoreRemote) return;
+    if (!mounted || !hasMoreRemote || isLoadingMoreRemote || locationGeocodeBusy) return;
     const nextOffset = listingsOffsetForFetch + listingsPageSize;
     if (nextOffset <= listingsOffsetForFetch || nextOffset > RO_LISTINGS_MAX_PAGE * listingsPageSize) return;
     const controller = new AbortController();
@@ -3225,9 +3370,9 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [mounted, hasMoreRemote, isLoadingMoreRemote, listingsOffsetForFetch, listingsPageSize, nextRemoteCursor]);
+  }, [mounted, hasMoreRemote, isLoadingMoreRemote, listingsOffsetForFetch, listingsPageSize, nextRemoteCursor, locationGeocodeBusy]);
 
-  /** Trebuie să coincidă cu `fetchRoListingsPage`: scope/crosslist + geo din state (nearLat/Lng) înlocuiește city/location/radius din URL. */
+  /** Trebuie să coincidă cu `fetchRoListingsPage`: scope/crosslist + nearLat/nearLng din state; radiusKm doar dacă rază > 0. */
   const countQueryString = useMemo(() => {
     const sp = new URLSearchParams(searchParams?.toString() ?? "");
     if (listingsScope === "live_bid" || listingsScope === "executari") {
@@ -3238,17 +3383,27 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     } else {
       sp.delete("includeExecutari");
     }
-    if (listingsUseServerGeoRadius) {
-      sp.set("nearLat", String(Number(nearLat!.toFixed(6))));
-      sp.set("nearLng", String(Number(nearLng!.toFixed(6))));
-      sp.delete("location");
-      sp.delete("locations");
-      sp.delete("city");
-      sp.delete("radiusKm");
-      sp.set("radiusKm", String(clampRoRadiusKmForApi(remoteLocationRadiusKm)));
+    applyRoListingsFetchLocationMode(sp, listingsHasGeoCenter ? "geo" : "location");
+    if (listingsHasGeoCenter) {
+      sp.set("nearLat", String(Number(nearLat!.toFixed(3))));
+      sp.set("nearLng", String(Number(nearLng!.toFixed(3))));
+      if (locationRadiusKm > 0) {
+        sp.set("radiusKm", String(clampRoRadiusKmForApi(remoteLocationRadiusKm)));
+      } else {
+        sp.delete("radiusKm");
+      }
     }
     return buildRoListingsCountQueryString(sp);
-  }, [searchParams, listingsScope, includeExecutariCrosslist, listingsUseServerGeoRadius, nearLat, nearLng, remoteLocationRadiusKm]);
+  }, [
+    searchParams,
+    listingsScope,
+    includeExecutariCrosslist,
+    listingsHasGeoCenter,
+    nearLat,
+    nearLng,
+    remoteLocationRadiusKm,
+    locationRadiusKm,
+  ]);
 
   useEffect(() => {
     setListingsCountAuthoritative(false);
@@ -4537,13 +4692,13 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
         const displayPrice = getAuctionDisplayPriceInSelectedCurrency(auction as any, selectedCurrency);
         if (priceRange.min && displayPrice < parseFloat(priceRange.min)) return false;
         if (priceRange.max && displayPrice > parseFloat(priceRange.max)) return false;
-        const geoRadiusSearchActive =
-          locationRadiusKm > 0 &&
+        /** Centru geo valid = sortare după distanță (cu sau fără rază). Nu mai filtra strict pe text oraș — altfel dispar toate anunțurile din afara localității. */
+        const listingsGeoCenterActive =
           nearLat != null &&
           nearLng != null &&
           Number.isFinite(nearLat) &&
           Number.isFinite(nearLng);
-        if (!geoRadiusSearchActive && !(auction as { __fromRelaxedGeo?: boolean }).__fromRelaxedGeo) {
+        if (!listingsGeoCenterActive && !(auction as { __fromRelaxedGeo?: boolean }).__fromRelaxedGeo) {
           if (selectedLocations.length > 1 && !selectedLocations.some((loc) => auctionMatchesLocation(auction, loc))) return false;
           if (selectedLocations.length <= 1 && location !== 'all' && !auctionMatchesLocation(auction, location)) return false;
         }
@@ -5029,16 +5184,15 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
         }
       }
 
-      // Location filter – match după city, county sau location.
-      // Când căutarea e deja geo (centru + rază), serverul a filtrat în cerc; nu mai cerem și
-      // potrivire textuală cu „București” etc. (altfel dispar anunțuri din Ilfov / zone limită).
-      const geoRadiusSearchActive =
-        locationRadiusKm > 0 &&
+      // Location filter – match textual doar când NU avem centru geo (serverul nu poate sorta după distanță).
+      // Cu nearLat/nearLng (rază sau „fără limită”), serverul livrează feed național sortat după distanță;
+      // potrivirea strictă pe „Chiajna, Ilfov” în UI ar elimina tot ce e în alt oraș → listă goală.
+      const listingsGeoCenterActive =
         nearLat != null &&
         nearLng != null &&
         Number.isFinite(nearLat) &&
         Number.isFinite(nearLng);
-      if (!geoRadiusSearchActive && !(auction as { __fromRelaxedGeo?: boolean }).__fromRelaxedGeo) {
+      if (!listingsGeoCenterActive && !(auction as { __fromRelaxedGeo?: boolean }).__fromRelaxedGeo) {
         if (selectedLocations.length > 1) {
           if (!selectedLocations.some((loc) => auctionMatchesLocation(auction, loc))) return false;
         } else if (location !== 'all' && !auctionMatchesLocation(auction, location)) {
@@ -5046,22 +5200,8 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
         }
       }
 
-      if (!(auction as { __fromRelaxedGeo?: boolean }).__fromRelaxedGeo) {
-        if (
-          locationRadiusKm > 0 &&
-          nearLat != null &&
-          nearLng != null &&
-          Number.isFinite(nearLat) &&
-          Number.isFinite(nearLng)
-        ) {
-          const pt =
-            parseCoordinatesJson((auction as { coordinates?: unknown }).coordinates) ||
-            parseCoordinatesJson((auction as { custom_fields?: Record<string, unknown> | null }).custom_fields?.coordinates);
-          if (pt) {
-            if (haversineDistanceKm({ lat: nearLat, lng: nearLng }, pt) > locationRadiusKm) return false;
-          }
-        }
-      }
+      // Radius / geo inclusion: aplicat în RPC (search_ro_listings_enterprise). Filtrare client
+      // după haversine duplica serverul și golea lista când coordonatele din JSON diferă sau lipsesc.
 
       // Condition filter
       if (!auctionMatchesConditionFilter(auction.condition, selectedSubcategory, condition, selectedConditions)) {
@@ -5232,7 +5372,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       filteredSupplementary: supplementary,
       filteredSections: [] as { scenario: any; label: string; items: any[] }[],
     };
-  }, [ladderBase, imageSearchProductIds, searchParams, searchQ, searchQTitleOnly, searchAnalysis, selectedCategory, selectedCategories, selectedSubcategory, selectedSubcategories, selectedExecutariMainCategory, selectedExecutariListCategory, selectedExecutariListCategories, activeSelectedExecutariListCategories, selectedLevel3, selectedPieseTipSlugs, selectedSize, selectedSizes, selectedBrand, selectedBrands, selectedColor, selectedColors, selectedCurrency, priceRange, marketplaceFreeOnly, location, selectedLocations, condition, selectedConditions, sortBy, timeRemainingFilter, initialOrder, detailedFilters, locationRadiusKm, nearLat, nearLng, locationCenterFromGps]);
+  }, [ladderBase, imageSearchProductIds, searchParams, searchQ, searchQTitleOnly, searchAnalysis, selectedCategory, selectedCategories, selectedSubcategory, selectedSubcategories, selectedExecutariMainCategory, selectedExecutariListCategory, selectedExecutariListCategories, activeSelectedExecutariListCategories, selectedLevel3, selectedPieseTipSlugs, selectedSize, selectedSizes, selectedBrand, selectedBrands, selectedColor, selectedColors, selectedCurrency, priceRange, marketplaceFreeOnly, location, selectedLocations, condition, selectedConditions, sortBy, timeRemainingFilter, initialOrder, detailedFilters, nearLat, nearLng, locationCenterFromGps]);
 
   const minimalNonTest = filteredMinimal.filter((a: any) => !a.isTest);
 
@@ -5486,12 +5626,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       return combinedAuctions;
     }
 
-    /** În timpul fetch-ului geo sau după rețea eșuată, lista SSR poate fi națională — filtrul pe rază o golea complet. */
-    const skipRadiusFilter =
-      isLoadingMoreRemote ||
-      isGeoRadiusRefreshing ||
-      geoListingsFetchFailed;
-
+    /** Ordine după distanță pe client; nu mai filtra după rază — RPC-ul aplică geo + fallback. */
     const mapped = combinedAuctions.map((auction, index) => ({
       auction,
       index,
@@ -5506,16 +5641,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       ),
     }));
 
-    const afterRadius = skipRadiusFilter
-      ? mapped
-      : mapped.filter(({ auction, distanceKm }) => {
-          if ((auction as { __fromRelaxedGeo?: boolean }).__fromRelaxedGeo) return true;
-          if (locationRadiusKm <= 0) return true;
-          if (distanceKm == null) return true;
-          return distanceKm <= locationRadiusKm;
-        });
-
-    return afterRadius
+    return mapped
       .sort((a, b) => {
         const aHasDistance = a.distanceKm != null;
         const bHasDistance = b.distanceKm != null;
@@ -5527,16 +5653,31 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
         return a.index - b.index;
       })
       .map(({ auction }) => auction);
-  }, [
-    combinedAuctions,
-    locationRadiusKm,
-    nearLat,
-    nearLng,
-    resolvedListingCoordinates,
-    isLoadingMoreRemote,
-    isGeoRadiusRefreshing,
-    geoListingsFetchFailed,
-  ]);
+  }, [combinedAuctions, nearLat, nearLng, resolvedListingCoordinates]);
+
+  /** Rezultate afișate cu centru geo dar fără distanță calculabilă (ex. fallback național fără coords în UI). */
+  const showGeoGeneralFallbackMessage = useMemo(() => {
+    if (nearLat == null || nearLng == null || !Number.isFinite(nearLat) || !Number.isFinite(nearLng)) {
+      return false;
+    }
+    const rows = filteredAuctions.filter((a: any) => !a.isTest);
+    if (rows.length === 0) return false;
+    for (const auction of rows) {
+      const d = getAuctionDistanceKm(
+        {
+          coordinates:
+            (auction as { coordinates?: unknown }).coordinates ??
+            resolvedListingCoordinates[
+              String((auction as { id?: unknown; slug?: unknown }).id ?? (auction as { slug?: unknown }).slug ?? '')
+            ],
+          custom_fields: (auction as { custom_fields?: Record<string, unknown> | null }).custom_fields,
+        },
+        { lat: nearLat, lng: nearLng },
+      );
+      if (d != null) return false;
+    }
+    return true;
+  }, [filteredAuctions, nearLat, nearLng, resolvedListingCoordinates]);
 
   // La schimbarea filtrelor/căutării resetează la primele 30
   const filtersSignature = `${listingsScope}|${includeExecutariCrosslist ? 'exec-on' : 'exec-off'}|${selectedCategory}|${selectedCategories.join(',')}|${selectedSubcategory}|${selectedSubcategories.join(',')}|${selectedExecutariMainCategory}|${activeSelectedExecutariListCategories.join(',')}|${selectedLevel3}|${selectedPieseTipSlugs.join(',')}|${selectedSize}|${selectedSizes.join(',')}|${selectedBrand}|${selectedBrands.join(',')}|${selectedModel}|${selectedModels.join(',')}|${selectedColor}|${selectedColors.join(',')}|${JSON.stringify(priceRange)}|${location}|${selectedLocations.join(',')}|${condition}|${selectedConditions.join(',')}|${imageFilter}|${selectedSellerKinds.join(',')}|${sortBy}|${searchParams?.get?.('q') ?? ''}|r${locationRadiusKm}|${nearLat ?? ''}|${nearLng ?? ''}|free:${marketplaceFreeOnly ? '1' : '0'}`;
@@ -5626,17 +5767,11 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       }
       return all;
     }
-    if (
-      nearLat != null &&
-      nearLng != null &&
-      Number.isFinite(nearLat) &&
-      Number.isFinite(nearLng) &&
-      locationRadiusKm > 0
-    ) {
+    if (nearLat != null && nearLng != null && Number.isFinite(nearLat) && Number.isFinite(nearLng)) {
       return filteredAuctions.filter((a: any) => !a.isTest);
     }
     return [...primaryNonTest, ...supplementaryNonTest];
-  }, [filteredSections, primaryNonTest, supplementaryNonTest, filteredAuctions, nearLat, nearLng, locationRadiusKm]);
+  }, [filteredSections, primaryNonTest, supplementaryNonTest, filteredAuctions, nearLat, nearLng]);
 
   const selectedCategoryBaseCount =
     selectedCategory !== 'all' ? (categoryCountsFromDb[selectedCategory] ?? null) : null;
@@ -6077,6 +6212,13 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
       return;
     }
 
+    if (locationGeocodeBusy) {
+      setRelaxedGapFillAuctions([]);
+      setRelaxedBackupProducts([]);
+      setRelaxedGapFillLoading(false);
+      return;
+    }
+
     let cancelled = false;
     const mainIds = new Set(realProducts.map((p: Record<string, unknown>) => String(p?.id ?? "")));
 
@@ -6130,6 +6272,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     nearLat,
     nearLng,
     selectedLocations,
+    locationGeocodeBusy,
   ]);
 
   // Grila canonică: doar rezultatele exacte; sugestiile relaxate rămân într-o secțiune separată.
@@ -6487,8 +6630,8 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
     setLocationSearch('');
     setNearLat(null);
     setNearLng(null);
-    setLocationRadiusKm(25);
-    setRemoteLocationRadiusKm(25);
+    setLocationRadiusKm(0);
+    setRemoteLocationRadiusKm(0);
     setCondition('all');
     setSelectedConditions([]);
     setImageFilter('all');
@@ -7085,7 +7228,12 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
-                <Label className="text-sm font-medium">Rază maximă: {locationRadiusKm} km</Label>
+                <Label className="text-sm font-medium">
+                  Rază maximă:{" "}
+                  {locationRadiusKm <= 0
+                    ? "fără limită (toată țara, sortare după distanță)"
+                    : `${locationRadiusKm} km`}
+                </Label>
                 {locationGeocodeBusy ? (
                   <LoaderCircle className="text-muted-foreground h-4 w-4 shrink-0 animate-spin" aria-hidden />
                 ) : nearLat != null && nearLng != null ? (
@@ -7095,31 +7243,31 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
               {mobileSheetLayout ? (
                 <input
                   type="range"
-                  min={5}
+                  min={0}
                   max={200}
                   step={5}
                   value={locationRadiusKm}
                   disabled={nearLat == null || nearLng == null}
                   onChange={(e) =>
-                    setLocationRadiusKm(Math.max(5, Math.min(200, Number((e.target as HTMLInputElement).value) || 5)))
+                    setLocationRadiusKm(Math.max(0, Math.min(200, Number((e.target as HTMLInputElement).value) || 0)))
                   }
                   aria-label="Rază maximă în kilometri"
                   className="h-2 w-full cursor-pointer accent-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
                 />
               ) : (
                 <Slider
-                  min={5}
+                  min={0}
                   max={200}
                   step={5}
                   value={[locationRadiusKm]}
-                  onValueChange={(v) => setLocationRadiusKm(Math.max(5, Math.min(200, v[0] ?? 25)))}
+                  onValueChange={(v) => setLocationRadiusKm(Math.max(0, Math.min(200, v[0] ?? 0)))}
                   disabled={nearLat == null || nearLng == null}
                   aria-label="Rază maximă în kilometri"
                   className="w-full py-1"
                 />
               )}
               <div className={`flex justify-between text-xs ${isDarkMode ? "text-gray-500" : "text-muted-foreground"}`}>
-                <span>5 km</span>
+                <span>Fără limită</span>
                 <span>200 km</span>
               </div>
             </div>
@@ -9544,7 +9692,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
                       location={locationSearch}
                       onLocationChange={handleLocationSearchChange}
                       radiusKm={locationRadiusKm}
-                      onRadiusChange={(km) => setLocationRadiusKm(Math.max(5, Math.min(200, km)))}
+                      onRadiusChange={(km) => setLocationRadiusKm(Math.max(0, Math.min(200, km)))}
                       category={selectedCategory === "all" ? "" : selectedCategory}
                       onCategoryChange={(value) => {
                         if (!value) {
@@ -9698,7 +9846,7 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
                       location={locationSearch}
                       onLocationChange={handleLocationSearchChange}
                       radiusKm={locationRadiusKm}
-                      onRadiusChange={(km) => setLocationRadiusKm(Math.max(5, Math.min(200, km)))}
+                      onRadiusChange={(km) => setLocationRadiusKm(Math.max(0, Math.min(200, km)))}
                       category={selectedCategory === "all" ? "" : selectedCategory}
                       onCategoryChange={(value) => {
                         if (!value) {
@@ -10254,6 +10402,17 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
                 </div>
               )}
 
+              {mounted && showGeoGeneralFallbackMessage && (
+                <div
+                  className={`mb-4 rounded-xl border px-4 py-3 ${isDarkMode ? "bg-sky-500/10 border-sky-500/35" : "bg-sky-50 border-sky-200"}`}
+                  role="status"
+                >
+                  <p className={`text-sm font-medium ${isDarkMode ? "text-sky-100" : "text-sky-900"}`}>
+                    No nearby listings found. Showing general results.
+                  </p>
+                </div>
+              )}
+
               {/* Search orchestrator: loading / error / relax notice */}
               {isOrchestratorLoading && (
                 <p className={`mb-2 text-sm ${isDarkMode ? 'text-amber-300' : 'text-amber-700'}`}>Optimizăm căutarea...</p>
@@ -10282,15 +10441,19 @@ function AuctionsPageContent({ resurseUtileLinks, initialListings, initialMarket
                     </span>
                   ) : visibleDisplayedList.length === 0 ? (
                     <span className={isDarkMode ? 'text-sky-300' : 'text-sky-700'}>
-                      {isLoadingMoreRemote ||
-                      isGeoRadiusRefreshing ||
-                      isPageNavigating ||
-                      isRouteTransitionPending ||
-                      isOrchestratorLoading
-                        ? "Căutăm cele mai apropiate rezultate…"
-                        : listingsUseServerGeoRadius
-                          ? `Nu am găsit anunțuri în raza de ${locationRadiusKm} km. Mărește raza din filtre sau alege „Toată România”.`
-                          : "Nu am găsit anunțuri pentru filtrele curente."}
+                      {locationGeocodeBusy
+                        ? "Se încarcă coordonatele localității pentru sortare după distanță…"
+                        : isLoadingMoreRemote ||
+                            isGeoRadiusRefreshing ||
+                            isPageNavigating ||
+                            isRouteTransitionPending ||
+                            isOrchestratorLoading
+                          ? "Căutăm cele mai apropiate rezultate…"
+                          : listingsHasGeoCenter
+                            ? locationRadiusKm > 0
+                              ? `Nu am găsit anunțuri în raza de ${locationRadiusKm} km. Mărește raza din filtre sau alege fără limită la rază.`
+                              : "Nu am găsit anunțuri pentru filtrele și localitatea curentă. Încearcă alte filtre sau altă localitate."
+                            : "Nu am găsit anunțuri pentru filtrele curente."}
                     </span>
                   ) : canShowStrictTotalSummary && selectedCategory !== 'all' ? (
                     <>

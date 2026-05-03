@@ -258,22 +258,22 @@ export async function countProducts(query: ProductQueryStrict, access?: AccessCo
   const skipCountyStandalone = Boolean(locKey && countyKey && locKey === countyKey);
   const skipCityStandalone = Boolean(locKey && cityKey && locKey === cityKey);
 
-  if (county && !skipCountyStandalone) {
-    builder = builder.ilike("county", `%${escapeIlike(county)}%`);
-  }
-
-  if (city && !skipCityStandalone) {
-    builder = builder.ilike("city", `%${escapeIlike(city)}%`);
-  }
-
   const hasGeoCenter =
     typeof resolved.near_lat === "number" &&
     typeof resolved.near_lng === "number" &&
-    typeof resolved.radius_km === "number" &&
     Number.isFinite(resolved.near_lat) &&
     Number.isFinite(resolved.near_lng) &&
-    Number.isFinite(resolved.radius_km) &&
-    resolved.radius_km > 0;
+    Math.abs(resolved.near_lat) <= 90 &&
+    Math.abs(resolved.near_lng) <= 180;
+
+  if (county && !skipCountyStandalone && !hasGeoCenter) {
+    builder = builder.ilike("county", `%${escapeIlike(county)}%`);
+  }
+
+  if (city && !skipCityStandalone && !hasGeoCenter) {
+    builder = builder.ilike("city", `%${escapeIlike(city)}%`);
+  }
+
   if (loc && !hasGeoCenter) {
     const locEsc = escapeIlike(loc);
     builder = builder.ilike("locality_search", `%${locEsc}%`);

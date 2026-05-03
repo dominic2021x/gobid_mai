@@ -219,7 +219,8 @@ export function RoMobileMarketplaceFilters({
     if (isAdvancedControlled) onAdvancedOpenChange?.(v);
     else setAdvancedOpenInternal(v);
   };
-  const radiusProgress = `${((Math.max(5, Math.min(200, radiusKm)) - 5) / 195) * 100}%`;
+  const radiusClamped = Math.max(0, Math.min(200, radiusKm));
+  const radiusProgress = `${(radiusClamped / 200) * 100}%`;
   return (
     <div className="space-y-0">
       <FilterSection title="Locație" defaultOpen={true}>
@@ -238,7 +239,12 @@ export function RoMobileMarketplaceFilters({
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <Label className="text-sm font-medium">
-                Rază maximă: {hasLocationCenter ? `${radiusKm} km` : "Toată țara"}
+                Rază maximă:{" "}
+                {!hasLocationCenter
+                  ? "Toată țara"
+                  : radiusKm <= 0
+                    ? "fără limită (sortare după distanță)"
+                    : `${radiusKm} km`}
               </Label>
               {useMyLocationBusy ? (
                 <Loader2
@@ -255,11 +261,11 @@ export function RoMobileMarketplaceFilters({
             </div>
             <input
               type="range"
-              min={5}
+              min={0}
               max={200}
               step={5}
               value={radiusKm}
-              onChange={(e) => onRadiusChange(Number(e.target.value) || 5)}
+              onChange={(e) => onRadiusChange(Number(e.target.value) || 0)}
               disabled={!hasLocationCenter}
               style={{
                 background: `linear-gradient(90deg, rgba(14,165,233,0.95) 0%, rgba(6,182,212,0.95) ${radiusProgress}, rgba(148,163,184,0.25) ${radiusProgress}, rgba(148,163,184,0.25) 100%)`,
@@ -279,7 +285,7 @@ export function RoMobileMarketplaceFilters({
               )}
             />
             <div className="flex justify-between text-xs text-muted-foreground">
-              <span>5 km</span>
+              <span>Fără limită</span>
               <div className="flex items-center gap-2">
                 <span>200 km</span>
                 {onUseNationwide ? (

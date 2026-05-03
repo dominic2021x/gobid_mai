@@ -34,6 +34,7 @@ import { haversineDistanceKm, parseCoordinatesJson } from "@/lib/geo/haversine";
 import { getProductsDerivedDataVersion } from "@/lib/server/products/derivedDataVersion";
 import { getOrLoadFromSharedTtlCache } from "@/lib/server/sharedTtlCache";
 import { isPlausibleProductImageSource } from "@/lib/image/isPlausibleProductImageSource";
+import { roundRoListingGeoCoord } from "@/lib/ro/roGeoRound";
 
 /** Grid/list payload only — no description/documents/seo/risk JSON blobs (detail pages fetch those). */
 const LISTING_SELECT = [
@@ -1614,7 +1615,7 @@ function getEnterpriseScalarFilter(value: string | undefined): string | null {
 export function canUseEnterpriseSupabasePath(query: ProductQuery): boolean {
   if (!USE_PRODUCTS_CHANNEL) return false;
   if (query.listingsCursor) return false;
-  // Geo radius is now handled IN-DB by search_ro_listings_enterprise via earth_box / earth_distance
+  // Geo radius is handled IN-DB by search_ro_listings_enterprise (bbox + earth_distance, meters vs km).
   // (see migration 20260503180400). It used to escape the enterprise path and fall through to a
   // 100k-row JS Haversine scan that took minutes; we intentionally route it through the RPC now.
   // Placeholder image URLs count as "without images" in the current JS matcher;
@@ -1703,19 +1704,30 @@ export function buildEnterpriseRpcArgs(
     p_footwear_type: getEnterpriseScalarFilter(query.footwearType),
     p_accessory_type: getEnterpriseScalarFilter(query.accessoryType),
     p_sort: (query.sort ?? "newest").trim() || "newest",
-    // Indexed geo radius (Phase 1.5). RPC ignores all three when any is null/invalid.
+    // Geo: valid center → distance sort în RPC; radius în km → RPC convertește la metri pentru earth_distance.
     p_near_lat:
       typeof query.near_lat === "number" && Number.isFinite(query.near_lat) && Math.abs(query.near_lat) <= 90
-        ? query.near_lat
+        ? roundRoListingGeoCoord(query.near_lat)
         : null,
     p_near_lng:
       typeof query.near_lng === "number" && Number.isFinite(query.near_lng) && Math.abs(query.near_lng) <= 180
-        ? query.near_lng
+        ? roundRoListingGeoCoord(query.near_lng)
         : null,
     p_radius_km:
       typeof query.radius_km === "number" && Number.isFinite(query.radius_km) && query.radius_km > 0
         ? query.radius_km
         : null,
+    p_debug: typeof process !== "undefined" && process.env.DEBUG_LISTINGS_GEO_RPC_DEBUG === "1",
+    p_debug_skip_distance_sort:
+      typeof process !== "undefined" && process.env.DEBUG_LISTINGS_GEO_SKIP_DISTANCE === "1",
+    p_debug_skip_bbox: typeof process !== "undefined" && process.env.DEBUG_LISTINGS_GEO_SKIP_BBOX === "1",
+    p_debug_force_radius_km: (() => {
+      if (typeof process === "undefined") return null;
+      const raw = process.env.DEBUG_LISTINGS_GEO_FORCE_RADIUS_KM;
+      if (raw == null || raw === "") return null;
+      const n = Number(raw);
+      return Number.isFinite(n) && n > 0 ? n : null;
+    })(),
   };
 }
 
@@ -1756,12 +1768,19 @@ async function getRoListingsEnterpriseSupabase(
       : false;
   const args = buildEnterpriseRpcArgs(query, access, includeExecutariCrosslist, limit);
   const load = async (): Promise<RoListingsResult> => {
+    const dbgGeo = process.env.DEBUG_LISTINGS_GEO_TIMING === "1";
+    const t0 = dbgGeo ? Date.now() : 0;
     const { data, error } = await runPostgrestQuery<Record<string, unknown>[]>(
       (signal) => supabaseAdmin!
         .rpc("search_ro_listings_enterprise", args)
         .abortSignal(signal),
       { timeoutMs: 4500, maxRetries: 0, retryDelayMs: 150 },
     );
+    if (dbgGeo) {
+      const ms = Date.now() - t0;
+      const n = Array.isArray(data) ? data.length : 0;
+      console.debug("[listings] search_ro_listings_enterprise", { ms, rows: n, near_lat: args.p_near_lat, near_lng: args.p_near_lng });
+    }
 
     if (error) {
       const msg = typeof error.message === "string" ? error.message : "Enterprise Supabase listings query failed";
@@ -1771,6 +1790,14 @@ async function getRoListingsEnterpriseSupabase(
     const rows = ((data ?? []) as Record<string, unknown>[]).map((row) => {
       const copy = { ...row };
       delete copy.enterprise_rank;
+      delete copy.debug_cnt_all;
+      delete copy.debug_cnt_geo;
+      delete copy.debug_cnt_candidates_geo;
+      delete copy.debug_cnt_page_geo;
+      delete copy.debug_cnt_final;
+      delete copy.debug_geo_slice_sample;
+      delete copy.debug_cnt_filtered_all;
+      delete copy.debug_cnt_geo_slice;
       return copy;
     });
     const hasMore = rows.length > limit;

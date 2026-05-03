@@ -7,6 +7,7 @@ import { resolveAccess } from "@/lib/server/access/resolveAccess";
 import { getRoListings } from "@/lib/server/products/listingsRepo";
 import { countProductsWithEstimateMeta } from "@/lib/server/products/listingsCountRepo";
 import type { RoListingsTotalKind } from "@/lib/server/products/listingsCountRepo";
+import { enrichRoListingsRawSearchParamsWithResolvedCenter } from "@/lib/ro/enrichRoListingsSearchParamsWithResolvedCenter";
 import { normalizeRoListingsSearchParams } from "@/lib/ro/normalizedListingsQuery";
 import { RO_LISTINGS_PAGE_SIZE_DESKTOP } from "@/lib/ro/roListingsPagination";
 
@@ -70,7 +71,20 @@ export async function GET(request: NextRequest) {
       if (!auth.ok) return auth.response;
     }
 
-    const { query, hasFilters, cacheKey } = normalizeRoListingsSearchParams(searchParams);
+    const rawParams: Record<string, string> = {};
+    for (const [key, value] of searchParams.entries()) {
+      rawParams[key] = value;
+    }
+    const { enriched: enrichedRaw, resolved: resolvedListingCenter } =
+      await enrichRoListingsRawSearchParamsWithResolvedCenter(rawParams);
+    const enrichedSearchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(enrichedRaw)) {
+      if (value === undefined || value === null) continue;
+      const s = Array.isArray(value) ? value[0] : value;
+      if (s == null || String(s).trim() === "") continue;
+      enrichedSearchParams.set(key, String(s));
+    }
+    const { query, hasFilters, cacheKey } = normalizeRoListingsSearchParams(enrichedSearchParams);
     /**
      * Location-filtered first paint matches /api/search/results — return items+hasMore as fast as
      * possible, defer the total. Client polls /api/ro/listings-count in parallel for the badge.
@@ -172,6 +186,15 @@ export async function GET(request: NextRequest) {
       ...(typeof total === "number" ? { total, total_kind: totalKind } : {}),
       fresh,
       ...(mode ? { mode } : {}),
+      ...(resolvedListingCenter
+        ? {
+            resolved_center: {
+              lat: resolvedListingCenter.lat,
+              lng: resolvedListingCenter.lng,
+              match: resolvedListingCenter.match,
+            },
+          }
+        : {}),
     };
 
     if (redis && redisKey) {
@@ -192,6 +215,13 @@ export async function GET(request: NextRequest) {
           ? "public, s-maxage=10, stale-while-revalidate=60"
           : "public, s-maxage=30, stale-while-revalidate=300",
     );
+    if (resolvedListingCenter) {
+      response.headers.set(
+        "x-ro-resolved-center",
+        `${resolvedListingCenter.lat},${resolvedListingCenter.lng}`,
+      );
+      response.headers.set("x-ro-resolved-match", resolvedListingCenter.match);
+    }
     return response;
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unexpected error";

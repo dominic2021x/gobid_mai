@@ -1,70 +1,21 @@
--- RO instant search — Phase 1.5: enterprise RPCs v2 with approval_normalized + distance-first geo.
+-- Geo perf for search_ro_listings_enterprise (+ count twins):
+-- - effective_radius_km = COALESCE(NULLIF(p_radius_km,0), 200), capped at 2000 (avoids full-table distance sort).
+-- - Bbox prefilter: geo_lat/geo_lng within >=0.5° and >= radius/111° so planner can use btree (products_geo_idx)
+--   before earth_box / earth_distance (GiST products_geo_gist_idx still used for sphere cutoff).
+-- - Latency: replaces “sort entire filtered set by distance” with a bounded geographic slice first.
+-- Client should send near_lat/near_lng rounded to 3 decimals for cache stability (see listingsRepo).
+-- Trade-off: listings without geo_lat/geo_lng are excluded when a center is set (same as strict radius mode).
 --
--- Params at the END: p_near_lat, p_near_lng, p_radius_km (defaults keep old callers valid).
---
--- has_center: valid p_near_lat/lng → ORDER BY distance (NULLS LAST for rows fără geo); city/county/location
---   nu mai sunt filtre WHERE (devin boost în ORDER BY pentru search).
--- has_radius: has_center + p_radius_km > 0 → cutoff sargabil (earth_box + earth_distance) pe products_geo_gist_idx.
--- For p_location fără centru, locality_search (city + ' ' + county) când p_county și p_city goale — paritate PostgREST.
---
--- New params change the function signature; CREATE OR REPLACE would create a NEW overload instead of
--- replacing the existing one, so we DROP the old signatures first.
+-- See scripts/explain-search-ro-listings-enterprise.sql for EXPLAIN ANALYZE templates.
 
-drop function if exists public.search_ro_listings_enterprise(
-  text, text, text, boolean, boolean, integer, integer,
-  text[], text[], text[], text[], text[], text[], text[],
-  text, text, text, numeric, numeric, text[], text[], text,
-  text[], text[], text, text, text, text[], boolean, boolean,
-  text, text, text, text, text, text, text, text,
-  double precision, double precision, double precision
-);
+CREATE INDEX IF NOT EXISTS products_geo_idx ON public.products (geo_lat, geo_lng);
 
-drop function if exists public.count_ro_listings_enterprise(
-  text, text, text, boolean, boolean, integer, integer,
-  text[], text[], text[], text[], text[], text[], text[],
-  text, text, text, numeric, numeric, text[], text[], text,
-  text[], text[], text, text, text, text[], boolean, boolean,
-  text, text, text, text, text, text, text, text,
-  double precision, double precision, double precision
-);
+COMMENT ON INDEX public.products_geo_idx IS
+  'B-tree on geo_lat/geo_lng for bbox range filters before earth_distance (pairs with products_geo_gist_idx).';
 
-drop function if exists public.count_ro_listings_enterprise_estimate(
-  text, text, text, boolean, boolean, integer, integer,
-  text[], text[], text[], text[], text[], text[], text[],
-  text, text, text, numeric, numeric, text[], text[], text,
-  text[], text[], text, text, text, text[], boolean, boolean,
-  text, text, text, text, text, text, text, text,
-  double precision, double precision, double precision
-);
-
-drop function if exists public.search_ro_listings_enterprise(
-  text, text, text, boolean, boolean, integer, integer,
-  text[], text[], text[], text[], text[], text[], text[],
-  text, text, text, numeric, numeric, text[], text[], text,
-  text[], text[], text, text, text, text[], boolean, boolean,
-  text, text, text, text, text, text, text, text
-);
-
-drop function if exists public.count_ro_listings_enterprise(
-  text, text, text, boolean, boolean, integer, integer,
-  text[], text[], text[], text[], text[], text[], text[],
-  text, text, text, numeric, numeric, text[], text[], text,
-  text[], text[], text, text, text, text[], boolean, boolean,
-  text, text, text, text, text, text, text, text
-);
-
-drop function if exists public.count_ro_listings_enterprise_estimate(
-  text, text, text, boolean, boolean, integer, integer,
-  text[], text[], text[], text[], text[], text[], text[],
-  text, text, text, numeric, numeric, text[], text[], text,
-  text[], text[], text, text, text, text[], boolean, boolean,
-  text, text, text, text, text, text, text, text
-);
 
 -- ───────────────────────────────────────────────────────────────────────────────
--- search_ro_listings_enterprise v2
--- ───────────────────────────────────────────────────────────────────────────────
-create function public.search_ro_listings_enterprise(
+create or replace function public.search_ro_listings_enterprise(
   p_q text default null,
   p_channel text default 'ro',
   p_scope text default 'all',
@@ -161,11 +112,12 @@ as $$
       case
         when p_near_lat is not null and p_near_lng is not null
           and abs(p_near_lat) <= 90 and abs(p_near_lng) <= 180
-          and p_radius_km is not null
-          and p_radius_km > 0
-        then true
-        else false
-      end as has_radius,
+        then least(
+          greatest(coalesce(nullif(p_radius_km, 0), 200::double precision), 1::double precision),
+          2000::double precision
+        )
+        else null
+      end as effective_radius_km,
       nullif(
         trim(
           coalesce(
@@ -176,6 +128,23 @@ as $$
         ),
         ''
       ) as boost_pat
+  ),
+  param as (
+    select
+      i.*,
+      (i.has_center and i.effective_radius_km is not null and i.effective_radius_km > 0) as has_radius,
+      case
+        when i.has_center
+        then greatest(0.5::double precision, i.effective_radius_km / 111.0)
+      end as bbox_lat_delta,
+      case
+        when i.has_center
+        then greatest(
+          0.5::double precision,
+          i.effective_radius_km / greatest(111.320 * cos(radians(p_near_lat)), 1e-9::double precision)
+        )
+      end as bbox_lng_delta
+    from input i
   ),
   ts as (
     select case
@@ -292,18 +261,20 @@ as $$
           or unaccent(lower(coalesce(p.city, ''))) like '%' || unaccent(lower(btrim(p_location))) || '%'
         )
       )
-      -- Geo cutoff only when radius > 0; products_geo_gist_idx satisfies the prefilter.
+      -- Geo: bbox + sphere cutoff (default 200 km); see migration header.
       and (
-        not (select has_radius from input)
+        not (select has_center from input)
         or (
           p.geo_lat is not null
           and p.geo_lng is not null
-          and extensions.earth_box(extensions.ll_to_earth(p_near_lat, p_near_lng), p_radius_km * 1000.0)
+          and p.geo_lat between p_near_lat - (select bbox_lat_delta from param) and p_near_lat + (select bbox_lat_delta from param)
+          and p.geo_lng between p_near_lng - (select bbox_lng_delta from param) and p_near_lng + (select bbox_lng_delta from param)
+          and extensions.earth_box(extensions.ll_to_earth(p_near_lat, p_near_lng), (select effective_radius_km from param) * 1000.0)
               @> extensions.ll_to_earth(p.geo_lat, p.geo_lng)
           and extensions.earth_distance(
                 extensions.ll_to_earth(p_near_lat, p_near_lng),
                 extensions.ll_to_earth(p.geo_lat, p.geo_lng)
-              ) <= p_radius_km * 1000.0
+              ) <= (select effective_radius_km from param) * 1000.0
         )
       )
       and (
@@ -419,7 +390,7 @@ as $$
     f.sold_at,
     f.coordinates,
     f.rank_score as enterprise_rank
-  from filtered f, input i
+  from filtered f, param i
   order by
     -- Text-match boost when we have a center (location/city/county are not WHERE filters).
     case
@@ -460,7 +431,7 @@ comment on function public.search_ro_listings_enterprise(
   text, text, text, text, text, text, text, text,
   double precision, double precision, double precision
 ) is
-  'Enterprise /ro listing retrieval v2: distance-first when p_near_lat/lng valid — optional radius cutoff (p_radius_km>0); city/county/location are ORDER BY boost, not strict WHERE.';
+  'Enterprise /ro v2 geo-perf: default 200 km when p_radius_km null/0; bbox + sphere filter; btree (geo_lat,geo_lng). City/county/location are ORDER BY boost when center set.';
 
 grant execute on function public.search_ro_listings_enterprise(
   text, text, text, boolean, boolean, integer, integer,
@@ -474,7 +445,7 @@ grant execute on function public.search_ro_listings_enterprise(
 -- ───────────────────────────────────────────────────────────────────────────────
 -- count_ro_listings_enterprise v2 (exact total)
 -- ───────────────────────────────────────────────────────────────────────────────
-create function public.count_ro_listings_enterprise(
+create or replace function public.count_ro_listings_enterprise(
   p_q text default null,
   p_channel text default 'ro',
   p_scope text default 'all',
@@ -535,11 +506,29 @@ as $$
       case
         when p_near_lat is not null and p_near_lng is not null
           and abs(p_near_lat) <= 90 and abs(p_near_lng) <= 180
-          and p_radius_km is not null
-          and p_radius_km > 0
-        then true
-        else false
-      end as has_radius
+        then least(
+          greatest(coalesce(nullif(p_radius_km, 0), 200::double precision), 1::double precision),
+          2000::double precision
+        )
+        else null
+      end as effective_radius_km
+  ),
+  param as (
+    select
+      i.*,
+      (i.has_center and i.effective_radius_km is not null and i.effective_radius_km > 0) as has_radius,
+      case
+        when i.has_center
+        then greatest(0.5::double precision, i.effective_radius_km / 111.0)
+      end as bbox_lat_delta,
+      case
+        when i.has_center
+        then greatest(
+          0.5::double precision,
+          i.effective_radius_km / greatest(111.320 * cos(radians(p_near_lat)), 1e-9::double precision)
+        )
+      end as bbox_lng_delta
+    from input i
   ),
   ts as (
     select case
@@ -650,16 +639,18 @@ as $$
         )
       )
       and (
-        not (select has_radius from input)
+        not (select has_center from input)
         or (
           p.geo_lat is not null
           and p.geo_lng is not null
-          and extensions.earth_box(extensions.ll_to_earth(p_near_lat, p_near_lng), p_radius_km * 1000.0)
+          and p.geo_lat between p_near_lat - (select bbox_lat_delta from param) and p_near_lat + (select bbox_lat_delta from param)
+          and p.geo_lng between p_near_lng - (select bbox_lng_delta from param) and p_near_lng + (select bbox_lng_delta from param)
+          and extensions.earth_box(extensions.ll_to_earth(p_near_lat, p_near_lng), (select effective_radius_km from param) * 1000.0)
               @> extensions.ll_to_earth(p.geo_lat, p.geo_lng)
           and extensions.earth_distance(
                 extensions.ll_to_earth(p_near_lat, p_near_lng),
                 extensions.ll_to_earth(p.geo_lat, p.geo_lng)
-              ) <= p_radius_km * 1000.0
+              ) <= (select effective_radius_km from param) * 1000.0
         )
       )
       and (
@@ -742,7 +733,7 @@ grant execute on function public.count_ro_listings_enterprise(
 -- ───────────────────────────────────────────────────────────────────────────────
 -- count_ro_listings_enterprise_estimate v2 (reltuples for default feed; capped 1001 otherwise)
 -- ───────────────────────────────────────────────────────────────────────────────
-create function public.count_ro_listings_enterprise_estimate(
+create or replace function public.count_ro_listings_enterprise_estimate(
   p_q text default null,
   p_channel text default 'ro',
   p_scope text default 'all',
@@ -803,11 +794,29 @@ as $$
       case
         when p_near_lat is not null and p_near_lng is not null
           and abs(p_near_lat) <= 90 and abs(p_near_lng) <= 180
-          and p_radius_km is not null
-          and p_radius_km > 0
-        then true
-        else false
-      end as has_radius
+        then least(
+          greatest(coalesce(nullif(p_radius_km, 0), 200::double precision), 1::double precision),
+          2000::double precision
+        )
+        else null
+      end as effective_radius_km
+  ),
+  param as (
+    select
+      i.*,
+      (i.has_center and i.effective_radius_km is not null and i.effective_radius_km > 0) as has_radius,
+      case
+        when i.has_center
+        then greatest(0.5::double precision, i.effective_radius_km / 111.0)
+      end as bbox_lat_delta,
+      case
+        when i.has_center
+        then greatest(
+          0.5::double precision,
+          i.effective_radius_km / greatest(111.320 * cos(radians(p_near_lat)), 1e-9::double precision)
+        )
+      end as bbox_lng_delta
+    from input i
   ),
   ts as (
     select case
@@ -918,16 +927,18 @@ as $$
         )
       )
       and (
-        not (select has_radius from input)
+        not (select has_center from input)
         or (
           p.geo_lat is not null
           and p.geo_lng is not null
-          and extensions.earth_box(extensions.ll_to_earth(p_near_lat, p_near_lng), p_radius_km * 1000.0)
+          and p.geo_lat between p_near_lat - (select bbox_lat_delta from param) and p_near_lat + (select bbox_lat_delta from param)
+          and p.geo_lng between p_near_lng - (select bbox_lng_delta from param) and p_near_lng + (select bbox_lng_delta from param)
+          and extensions.earth_box(extensions.ll_to_earth(p_near_lat, p_near_lng), (select effective_radius_km from param) * 1000.0)
               @> extensions.ll_to_earth(p.geo_lat, p.geo_lng)
           and extensions.earth_distance(
                 extensions.ll_to_earth(p_near_lat, p_near_lng),
                 extensions.ll_to_earth(p.geo_lat, p.geo_lng)
-              ) <= p_radius_km * 1000.0
+              ) <= (select effective_radius_km from param) * 1000.0
         )
       )
       and (

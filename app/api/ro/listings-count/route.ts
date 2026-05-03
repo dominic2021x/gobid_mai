@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { enrichRoListingsRawSearchParamsWithResolvedCenter } from "@/lib/ro/enrichRoListingsSearchParamsWithResolvedCenter";
 import { normalizeRoListingsSearchParams } from "@/lib/ro/normalizedListingsQuery";
 import { resolveAccess } from "@/lib/server/access/resolveAccess";
 import { countProducts, countProductsWithEstimateMeta } from "@/lib/server/products/listingsCountRepo";
@@ -28,7 +29,19 @@ function getCountCacheSearchParamsEntries(searchParams: URLSearchParams): [strin
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const { query, searchParams: normalizedSearchParams } = normalizeRoListingsSearchParams(searchParams);
+    const rawParams: Record<string, string> = {};
+    for (const [key, value] of searchParams.entries()) {
+      rawParams[key] = value;
+    }
+    const { enriched: enrichedRaw } = await enrichRoListingsRawSearchParamsWithResolvedCenter(rawParams);
+    const enrichedSearchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(enrichedRaw)) {
+      if (value === undefined || value === null) continue;
+      const s = Array.isArray(value) ? value[0] : value;
+      if (s == null || String(s).trim() === "") continue;
+      enrichedSearchParams.set(key, String(s));
+    }
+    const { query, searchParams: normalizedSearchParams } = normalizeRoListingsSearchParams(enrichedSearchParams);
     const access = await resolveAccess(request);
     const searchParamsEntries = getCountCacheSearchParamsEntries(normalizedSearchParams);
     const version = await getProductsDerivedDataVersion();

@@ -26,6 +26,8 @@ export interface InitialListingsPayload {
   /** How `totalCount` was produced — mirrors GET /api/ro/listings `total_kind`. */
   totalKind?: "exact" | "estimate" | "capped";
   source?: "ssr";
+  /** Server-only resolved center for distance sort when URL had location but no nearLat/nearLng. */
+  resolvedCenter?: { lat: number; lng: number; match: string };
   personalizedHomePreview?: RoPersonalizedHomePreview;
 }
 

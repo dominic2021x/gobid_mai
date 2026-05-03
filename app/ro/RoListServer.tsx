@@ -5,6 +5,7 @@ import {
 import { loadPersonalizedRoHomePreview } from "@/lib/ro/personalizedRoHomePreview";
 import { getAppliedInternalLinksForSource } from "@/lib/growth/internalLinks";
 import { normalizeRoListingsRawSearchParams } from "@/lib/ro/normalizedListingsQuery";
+import { enrichRoListingsRawSearchParamsWithResolvedCenter } from "@/lib/ro/enrichRoListingsSearchParamsWithResolvedCenter";
 import { normalizeRoListingsSortKey } from "@/lib/ro/roListingsSortParam";
 import { mergeDefaultRoListingsLimitForSsr } from "@/lib/ro/roListingsPagination";
 import { headers } from "next/headers";
@@ -28,7 +29,9 @@ export default async function RoListServer({
     searchParams,
     accessHeaders.get("user-agent"),
   );
-  const normalized = normalizeRoListingsRawSearchParams(searchParamsWithViewportLimit);
+  const { enriched: enrichedSearchParams, resolved: resolvedListingCenter } =
+    await enrichRoListingsRawSearchParamsWithResolvedCenter(searchParamsWithViewportLimit);
+  const normalized = normalizeRoListingsRawSearchParams(enrichedSearchParams);
   /** Aceeași valoare ca în URL după sanitizare — evită mismatch hidratare la `useSearchParams()` în client. */
   const initialMarketplaceQ = normalized.searchParams.get("q")?.trim() ?? "";
   const access = await resolveAccess({ headers: accessHeaders } as Request);
@@ -41,9 +44,9 @@ export default async function RoListServer({
     page <= 1;
 
   const [result, resurseUtileLinks, countMeta, personalizedPreviewItems] = await Promise.all([
-    getListingsCachedFromFullSearchParams(searchParamsWithViewportLimit, access),
+    getListingsCachedFromFullSearchParams(enrichedSearchParams, access),
     getAppliedInternalLinksForSource("/ro"),
-    getListingsCountEstimateMetaCachedFromFullSearchParams(searchParamsWithViewportLimit, access).catch(
+    getListingsCountEstimateMetaCachedFromFullSearchParams(enrichedSearchParams, access).catch(
       () => undefined as undefined,
     ),
     allowPersonalizedHome ? loadPersonalizedRoHomePreview(access) : Promise.resolve([] as Record<string, unknown>[]),
@@ -63,6 +66,15 @@ export default async function RoListServer({
     ...(typeof initialTotal === "number" ? { totalCount: initialTotal } : {}),
     ...(initialTotalKind ? { totalKind: initialTotalKind } : {}),
     source: "ssr",
+    ...(resolvedListingCenter
+      ? {
+          resolvedCenter: {
+            lat: resolvedListingCenter.lat,
+            lng: resolvedListingCenter.lng,
+            match: resolvedListingCenter.match,
+          },
+        }
+      : {}),
     ...(personalizedPreviewItems.length > 0
       ? { personalizedHomePreview: { items: personalizedPreviewItems } }
       : {}),

@@ -1,70 +1,12 @@
--- RO instant search — Phase 1.5: enterprise RPCs v2 with approval_normalized + distance-first geo.
---
--- Params at the END: p_near_lat, p_near_lng, p_radius_km (defaults keep old callers valid).
---
--- has_center: valid p_near_lat/lng → ORDER BY distance (NULLS LAST for rows fără geo); city/county/location
---   nu mai sunt filtre WHERE (devin boost în ORDER BY pentru search).
--- has_radius: has_center + p_radius_km > 0 → cutoff sargabil (earth_box + earth_distance) pe products_geo_gist_idx.
--- For p_location fără centru, locality_search (city + ' ' + county) când p_county și p_city goale — paritate PostgREST.
---
--- New params change the function signature; CREATE OR REPLACE would create a NEW overload instead of
--- replacing the existing one, so we DROP the old signatures first.
+-- Refines search_ro_listings_enterprise geo behavior:
+-- - Rows with NULL geo_lat/geo_lng are kept when a center is set (sorted after coord rows).
+-- - ORDER BY: (geo_lat IS NULL) ASC, then earth_distance for rows with both coords.
+-- - Bounded candidate set when has_center: sort+LIMIT before OFFSET/LIMIT pagination (default cap floor 1000).
+-- - Fallback: if geo_slice is empty but has_center, UNION ALL full filtered_all (same filters, no geo cutoff).
+-- - EXPLAIN: run scripts/explain-search-ro-listings-enterprise.sql; expect btree/geo indexes on hot paths (no Seq Scan on large cold tables when stats are healthy).
 
-drop function if exists public.search_ro_listings_enterprise(
-  text, text, text, boolean, boolean, integer, integer,
-  text[], text[], text[], text[], text[], text[], text[],
-  text, text, text, numeric, numeric, text[], text[], text,
-  text[], text[], text, text, text, text[], boolean, boolean,
-  text, text, text, text, text, text, text, text,
-  double precision, double precision, double precision
-);
+create or replace function public.search_ro_listings_enterprise(
 
-drop function if exists public.count_ro_listings_enterprise(
-  text, text, text, boolean, boolean, integer, integer,
-  text[], text[], text[], text[], text[], text[], text[],
-  text, text, text, numeric, numeric, text[], text[], text,
-  text[], text[], text, text, text, text[], boolean, boolean,
-  text, text, text, text, text, text, text, text,
-  double precision, double precision, double precision
-);
-
-drop function if exists public.count_ro_listings_enterprise_estimate(
-  text, text, text, boolean, boolean, integer, integer,
-  text[], text[], text[], text[], text[], text[], text[],
-  text, text, text, numeric, numeric, text[], text[], text,
-  text[], text[], text, text, text, text[], boolean, boolean,
-  text, text, text, text, text, text, text, text,
-  double precision, double precision, double precision
-);
-
-drop function if exists public.search_ro_listings_enterprise(
-  text, text, text, boolean, boolean, integer, integer,
-  text[], text[], text[], text[], text[], text[], text[],
-  text, text, text, numeric, numeric, text[], text[], text,
-  text[], text[], text, text, text, text[], boolean, boolean,
-  text, text, text, text, text, text, text, text
-);
-
-drop function if exists public.count_ro_listings_enterprise(
-  text, text, text, boolean, boolean, integer, integer,
-  text[], text[], text[], text[], text[], text[], text[],
-  text, text, text, numeric, numeric, text[], text[], text,
-  text[], text[], text, text, text, text[], boolean, boolean,
-  text, text, text, text, text, text, text, text
-);
-
-drop function if exists public.count_ro_listings_enterprise_estimate(
-  text, text, text, boolean, boolean, integer, integer,
-  text[], text[], text[], text[], text[], text[], text[],
-  text, text, text, numeric, numeric, text[], text[], text,
-  text[], text[], text, text, text, text[], boolean, boolean,
-  text, text, text, text, text, text, text, text
-);
-
--- ───────────────────────────────────────────────────────────────────────────────
--- search_ro_listings_enterprise v2
--- ───────────────────────────────────────────────────────────────────────────────
-create function public.search_ro_listings_enterprise(
   p_q text default null,
   p_channel text default 'ro',
   p_scope text default 'all',
@@ -161,11 +103,12 @@ as $$
       case
         when p_near_lat is not null and p_near_lng is not null
           and abs(p_near_lat) <= 90 and abs(p_near_lng) <= 180
-          and p_radius_km is not null
-          and p_radius_km > 0
-        then true
-        else false
-      end as has_radius,
+        then least(
+          greatest(coalesce(nullif(p_radius_km, 0), 200::double precision), 1::double precision),
+          2000::double precision
+        )
+        else null
+      end as effective_radius_km,
       nullif(
         trim(
           coalesce(
@@ -175,7 +118,31 @@ as $$
           )
         ),
         ''
-      ) as boost_pat
+      ) as boost_pat,
+      least(
+        5000,
+        greatest(
+          1000,
+          greatest(0, coalesce(p_offset, 0)) + least(greatest(coalesce(p_limit, 25), 1), 101) + 100
+        )
+      ) as candidate_cap
+  ),
+  param as (
+    select
+      i.*,
+      (i.has_center and i.effective_radius_km is not null and i.effective_radius_km > 0) as has_radius,
+      case
+        when i.has_center
+        then greatest(0.5::double precision, i.effective_radius_km / 111.0)
+      end as bbox_lat_delta,
+      case
+        when i.has_center
+        then greatest(
+          0.5::double precision,
+          i.effective_radius_km / greatest(111.320 * cos(radians(p_near_lat)), 1e-9::double precision)
+        )
+      end as bbox_lng_delta
+    from input i
   ),
   ts as (
     select case
@@ -190,7 +157,7 @@ as $$
       ''
     ) as tokens
   ),
-  filtered as (
+  filtered_all as (
     select
       p.*,
       case
@@ -292,20 +259,7 @@ as $$
           or unaccent(lower(coalesce(p.city, ''))) like '%' || unaccent(lower(btrim(p_location))) || '%'
         )
       )
-      -- Geo cutoff only when radius > 0; products_geo_gist_idx satisfies the prefilter.
-      and (
-        not (select has_radius from input)
-        or (
-          p.geo_lat is not null
-          and p.geo_lng is not null
-          and extensions.earth_box(extensions.ll_to_earth(p_near_lat, p_near_lng), p_radius_km * 1000.0)
-              @> extensions.ll_to_earth(p.geo_lat, p.geo_lng)
-          and extensions.earth_distance(
-                extensions.ll_to_earth(p_near_lat, p_near_lng),
-                extensions.ll_to_earth(p.geo_lat, p.geo_lng)
-              ) <= p_radius_km * 1000.0
-        )
-      )
+      -- Geo filtering applied in geo_slice / chosen (includes NULL coords + fallback).
       and (
         p_free_only
         and (
@@ -385,6 +339,69 @@ as $$
       and (nullif(btrim(coalesce(p_apparel_type, '')), '') is null or lower(coalesce(p.attributes->>'apparelType', '')) = lower(btrim(p_apparel_type)))
       and (nullif(btrim(coalesce(p_footwear_type, '')), '') is null or lower(coalesce(p.attributes->>'footwearType', '')) = lower(btrim(p_footwear_type)))
       and (nullif(btrim(coalesce(p_accessory_type, '')), '') is null or lower(coalesce(p.attributes->>'accessoryType', '')) = lower(btrim(p_accessory_type)))
+  ),
+  geo_slice as (
+    select f.*
+    from filtered_all f
+    where
+      not (select has_center from input)
+      or f.geo_lat is null
+      or f.geo_lng is null
+      or (
+        f.geo_lat is not null
+        and f.geo_lng is not null
+        and f.geo_lat between p_near_lat - (select bbox_lat_delta from param) and p_near_lat + (select bbox_lat_delta from param)
+        and f.geo_lng between p_near_lng - (select bbox_lng_delta from param) and p_near_lng + (select bbox_lng_delta from param)
+        and extensions.earth_box(extensions.ll_to_earth(p_near_lat, p_near_lng), (select effective_radius_km from param) * 1000.0)
+            @> extensions.ll_to_earth(f.geo_lat, f.geo_lng)
+        and extensions.earth_distance(
+              extensions.ll_to_earth(p_near_lat, p_near_lng),
+              extensions.ll_to_earth(f.geo_lat, f.geo_lng)
+            ) <= (select effective_radius_km from param) * 1000.0
+      )
+  ),
+  chosen as (
+    select gs.* from geo_slice gs
+    union all
+    select fa.*
+    from filtered_all fa
+    where (select has_center from input)
+      and not exists (select 1 from geo_slice limit 1)
+  ),
+  candidates as (
+    select f.*
+    from chosen f, param i
+    order by
+      case
+        when (select has_center from input)
+          and (select boost_pat from input) is not null
+          and (
+            unaccent(lower(coalesce(f.city, ''))) like '%' || unaccent(lower((select boost_pat from input))) || '%'
+            or unaccent(lower(coalesce(f.county, ''))) like '%' || unaccent(lower((select boost_pat from input))) || '%'
+            or unaccent(lower(coalesce(f.locality_search, ''))) like '%' || unaccent(lower((select boost_pat from input))) || '%'
+          )
+        then 0
+        else 1
+      end asc,
+      case when (select has_center from input) then (f.geo_lat is null) end asc nulls last,
+      case
+        when (select has_center from input)
+          and f.geo_lat is not null
+          and f.geo_lng is not null
+        then extensions.earth_distance(
+               extensions.ll_to_earth(p_near_lat, p_near_lng),
+               extensions.ll_to_earth(f.geo_lat, f.geo_lng)
+             )
+      end asc nulls last,
+      case when i.raw_q is not null and i.sort_key in ('', 'relevant') then f.rank_score end desc nulls last,
+      case when i.sort_key in ('price_asc', 'pricelow') then coalesce(f.starting_price_ron, f.starting_price, 0) end asc nulls last,
+      case when i.sort_key in ('price_desc', 'pricehigh') then coalesce(f.starting_price_ron, f.starting_price, 0) end desc nulls last,
+      case when i.sort_key in ('date_asc', 'oldest') then f.created_at end asc nulls last,
+      case when i.sort_key = 'title' then lower(f.title) end asc nulls last,
+      case when i.sort_key = 'timeleft' then f.auction_date end asc nulls last,
+      f.created_at desc nulls last,
+      f.id desc
+    limit (select case when (select has_center from input) then (select candidate_cap from input) end)
   )
   select
     f.id,
@@ -419,7 +436,7 @@ as $$
     f.sold_at,
     f.coordinates,
     f.rank_score as enterprise_rank
-  from filtered f, input i
+  from candidates f, param i
   order by
     -- Text-match boost when we have a center (location/city/county are not WHERE filters).
     case
@@ -433,8 +450,12 @@ as $$
       then 0
       else 1
     end asc,
-    -- Nearest first when any center is set; listings without coords last.
-    case when (select has_center from input)
+    -- Nearest first when any center is set; NULL geo rows after rows with coords (see geo_slice).
+    case when (select has_center from input) then (f.geo_lat is null) end asc nulls last,
+    case
+      when (select has_center from input)
+        and f.geo_lat is not null
+        and f.geo_lng is not null
       then extensions.earth_distance(
              extensions.ll_to_earth(p_near_lat, p_near_lng),
              extensions.ll_to_earth(f.geo_lat, f.geo_lng)
@@ -460,7 +481,7 @@ comment on function public.search_ro_listings_enterprise(
   text, text, text, text, text, text, text, text,
   double precision, double precision, double precision
 ) is
-  'Enterprise /ro listing retrieval v2: distance-first when p_near_lat/lng valid — optional radius cutoff (p_radius_km>0); city/county/location are ORDER BY boost, not strict WHERE.';
+  'Enterprise /ro: geo_slice keeps NULL coords + radius; candidate_cap limits distance sort work; fallback to national filtered_all when geo_slice empty.';
 
 grant execute on function public.search_ro_listings_enterprise(
   text, text, text, boolean, boolean, integer, integer,
@@ -471,10 +492,8 @@ grant execute on function public.search_ro_listings_enterprise(
   double precision, double precision, double precision
 ) to anon, authenticated, service_role;
 
--- ───────────────────────────────────────────────────────────────────────────────
--- count_ro_listings_enterprise v2 (exact total)
--- ───────────────────────────────────────────────────────────────────────────────
-create function public.count_ro_listings_enterprise(
+
+create or replace function public.count_ro_listings_enterprise(
   p_q text default null,
   p_channel text default 'ro',
   p_scope text default 'all',
@@ -523,6 +542,7 @@ stable
 security invoker
 set search_path = public, extensions
 as $$
+
   with input as (
     select
       nullif(btrim(left(coalesce(p_q, ''), 120)), '') as raw_q,
@@ -535,11 +555,29 @@ as $$
       case
         when p_near_lat is not null and p_near_lng is not null
           and abs(p_near_lat) <= 90 and abs(p_near_lng) <= 180
-          and p_radius_km is not null
-          and p_radius_km > 0
-        then true
-        else false
-      end as has_radius
+        then least(
+          greatest(coalesce(nullif(p_radius_km, 0), 200::double precision), 1::double precision),
+          2000::double precision
+        )
+        else null
+      end as effective_radius_km
+  ),
+  param as (
+    select
+      i.*,
+      (i.has_center and i.effective_radius_km is not null and i.effective_radius_km > 0) as has_radius,
+      case
+        when i.has_center
+        then greatest(0.5::double precision, i.effective_radius_km / 111.0)
+      end as bbox_lat_delta,
+      case
+        when i.has_center
+        then greatest(
+          0.5::double precision,
+          i.effective_radius_km / greatest(111.320 * cos(radians(p_near_lat)), 1e-9::double precision)
+        )
+      end as bbox_lng_delta
+    from input i
   ),
   ts as (
     select case
@@ -554,8 +592,8 @@ as $$
       ''
     ) as tokens
   ),
-  filtered as (
-    select 1
+  filtered_all_ids as (
+    select p.id
     from public.products p
     where p.status = any(coalesce(p_statuses, array['active', 'reserved', 'sold', 'in_progress']::text[]))
       and p.status <> 'deleted'
@@ -649,19 +687,7 @@ as $$
           or unaccent(lower(coalesce(p.city, ''))) like '%' || unaccent(lower(btrim(p_location))) || '%'
         )
       )
-      and (
-        not (select has_radius from input)
-        or (
-          p.geo_lat is not null
-          and p.geo_lng is not null
-          and extensions.earth_box(extensions.ll_to_earth(p_near_lat, p_near_lng), p_radius_km * 1000.0)
-              @> extensions.ll_to_earth(p.geo_lat, p.geo_lng)
-          and extensions.earth_distance(
-                extensions.ll_to_earth(p_near_lat, p_near_lng),
-                extensions.ll_to_earth(p.geo_lat, p.geo_lng)
-              ) <= p_radius_km * 1000.0
-        )
-      )
+      -- geo in geo_slice_ids
       and (
         p_free_only
         and (
@@ -716,8 +742,37 @@ as $$
       and (nullif(btrim(coalesce(p_apparel_type, '')), '') is null or lower(coalesce(p.attributes->>'apparelType', '')) = lower(btrim(p_apparel_type)))
       and (nullif(btrim(coalesce(p_footwear_type, '')), '') is null or lower(coalesce(p.attributes->>'footwearType', '')) = lower(btrim(p_footwear_type)))
       and (nullif(btrim(coalesce(p_accessory_type, '')), '') is null or lower(coalesce(p.attributes->>'accessoryType', '')) = lower(btrim(p_accessory_type)))
+  ),
+  geo_slice_ids as (
+    select fa.id
+    from filtered_all_ids fa
+    inner join public.products p on p.id = fa.id
+    where
+      not (select has_center from input)
+      or p.geo_lat is null
+      or p.geo_lng is null
+      or (
+        p.geo_lat is not null
+        and p.geo_lng is not null
+        and p.geo_lat between p_near_lat - (select bbox_lat_delta from param) and p_near_lat + (select bbox_lat_delta from param)
+        and p.geo_lng between p_near_lng - (select bbox_lng_delta from param) and p_near_lng + (select bbox_lng_delta from param)
+        and extensions.earth_box(extensions.ll_to_earth(p_near_lat, p_near_lng), (select effective_radius_km from param) * 1000.0)
+            @> extensions.ll_to_earth(p.geo_lat, p.geo_lng)
+        and extensions.earth_distance(
+              extensions.ll_to_earth(p_near_lat, p_near_lng),
+              extensions.ll_to_earth(p.geo_lat, p.geo_lng)
+            ) <= (select effective_radius_km from param) * 1000.0
+      )
+  ),
+  chosen_ids as (
+    select id from geo_slice_ids
+    union all
+    select fa.id
+    from filtered_all_ids fa
+    where (select has_center from input)
+      and not exists (select 1 from geo_slice_ids limit 1)
   )
-  select count(*)::bigint from filtered;
+  select count(*)::bigint from chosen_ids;
 $$;
 
 comment on function public.count_ro_listings_enterprise(
@@ -728,7 +783,7 @@ comment on function public.count_ro_listings_enterprise(
   text, text, text, text, text, text, text, text,
   double precision, double precision, double precision
 ) is
-  'Exact total v2 — same predicates as search_ro_listings_enterprise (distance sort + optional radius cutoff).';
+  'Exact total — matches search chosen set (geo_slice + optional fallback when geo_slice empty).';
 
 grant execute on function public.count_ro_listings_enterprise(
   text, text, text, boolean, boolean, integer, integer,
@@ -739,10 +794,8 @@ grant execute on function public.count_ro_listings_enterprise(
   double precision, double precision, double precision
 ) to anon, authenticated, service_role;
 
--- ───────────────────────────────────────────────────────────────────────────────
--- count_ro_listings_enterprise_estimate v2 (reltuples for default feed; capped 1001 otherwise)
--- ───────────────────────────────────────────────────────────────────────────────
-create function public.count_ro_listings_enterprise_estimate(
+
+create or replace function public.count_ro_listings_enterprise_estimate(
   p_q text default null,
   p_channel text default 'ro',
   p_scope text default 'all',
@@ -791,6 +844,7 @@ stable
 security invoker
 set search_path = public, extensions
 as $$
+
   with input as (
     select
       nullif(btrim(left(coalesce(p_q, ''), 120)), '') as raw_q,
@@ -803,11 +857,29 @@ as $$
       case
         when p_near_lat is not null and p_near_lng is not null
           and abs(p_near_lat) <= 90 and abs(p_near_lng) <= 180
-          and p_radius_km is not null
-          and p_radius_km > 0
-        then true
-        else false
-      end as has_radius
+        then least(
+          greatest(coalesce(nullif(p_radius_km, 0), 200::double precision), 1::double precision),
+          2000::double precision
+        )
+        else null
+      end as effective_radius_km
+  ),
+  param as (
+    select
+      i.*,
+      (i.has_center and i.effective_radius_km is not null and i.effective_radius_km > 0) as has_radius,
+      case
+        when i.has_center
+        then greatest(0.5::double precision, i.effective_radius_km / 111.0)
+      end as bbox_lat_delta,
+      case
+        when i.has_center
+        then greatest(
+          0.5::double precision,
+          i.effective_radius_km / greatest(111.320 * cos(radians(p_near_lat)), 1e-9::double precision)
+        )
+      end as bbox_lng_delta
+    from input i
   ),
   ts as (
     select case
@@ -822,8 +894,8 @@ as $$
       ''
     ) as tokens
   ),
-  filtered as (
-    select 1
+  filtered_all_ids as (
+    select p.id
     from public.products p
     where p.status = any(coalesce(p_statuses, array['active', 'reserved', 'sold', 'in_progress']::text[]))
       and p.status <> 'deleted'
@@ -917,19 +989,7 @@ as $$
           or unaccent(lower(coalesce(p.city, ''))) like '%' || unaccent(lower(btrim(p_location))) || '%'
         )
       )
-      and (
-        not (select has_radius from input)
-        or (
-          p.geo_lat is not null
-          and p.geo_lng is not null
-          and extensions.earth_box(extensions.ll_to_earth(p_near_lat, p_near_lng), p_radius_km * 1000.0)
-              @> extensions.ll_to_earth(p.geo_lat, p.geo_lng)
-          and extensions.earth_distance(
-                extensions.ll_to_earth(p_near_lat, p_near_lng),
-                extensions.ll_to_earth(p.geo_lat, p.geo_lng)
-              ) <= p_radius_km * 1000.0
-        )
-      )
+      -- geo in geo_slice_ids
       and (
         p_free_only
         and (
@@ -985,6 +1045,35 @@ as $$
       and (nullif(btrim(coalesce(p_footwear_type, '')), '') is null or lower(coalesce(p.attributes->>'footwearType', '')) = lower(btrim(p_footwear_type)))
       and (nullif(btrim(coalesce(p_accessory_type, '')), '') is null or lower(coalesce(p.attributes->>'accessoryType', '')) = lower(btrim(p_accessory_type)))
   ),
+  geo_slice_ids as (
+    select fa.id
+    from filtered_all_ids fa
+    inner join public.products p on p.id = fa.id
+    where
+      not (select has_center from input)
+      or p.geo_lat is null
+      or p.geo_lng is null
+      or (
+        p.geo_lat is not null
+        and p.geo_lng is not null
+        and p.geo_lat between p_near_lat - (select bbox_lat_delta from param) and p_near_lat + (select bbox_lat_delta from param)
+        and p.geo_lng between p_near_lng - (select bbox_lng_delta from param) and p_near_lng + (select bbox_lng_delta from param)
+        and extensions.earth_box(extensions.ll_to_earth(p_near_lat, p_near_lng), (select effective_radius_km from param) * 1000.0)
+            @> extensions.ll_to_earth(p.geo_lat, p.geo_lng)
+        and extensions.earth_distance(
+              extensions.ll_to_earth(p_near_lat, p_near_lng),
+              extensions.ll_to_earth(p.geo_lat, p.geo_lng)
+            ) <= (select effective_radius_km from param) * 1000.0
+      )
+  ),
+  chosen_ids as (
+    select id from geo_slice_ids
+    union all
+    select fa.id
+    from filtered_all_ids fa
+    where (select has_center from input)
+      and not exists (select 1 from geo_slice_ids limit 1)
+  ),
   __flags as (
     select
       (
@@ -1023,7 +1112,7 @@ as $$
       ) as use_reltuples
   ),
   __capped as (
-    select (count(*))::bigint as c from (select 1 from filtered limit 1001) z
+    select (count(*))::bigint as c from (select 1 from chosen_ids limit 1001) z
   )
   select
     case when (select use_reltuples from __flags)
@@ -1045,7 +1134,7 @@ comment on function public.count_ro_listings_enterprise_estimate(
   text, text, text, text, text, text, text, text,
   double precision, double precision, double precision
 ) is
-  'Capped estimate v2 — reltuples only for broad default feed (no geo center); else count capped at 1001. Same predicates as enterprise search.';
+  'Capped estimate — chosen_ids semantics match enterprise search (geo + fallback).';
 
 grant execute on function public.count_ro_listings_enterprise_estimate(
   text, text, text, boolean, boolean, integer, integer,

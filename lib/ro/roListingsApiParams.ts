@@ -10,6 +10,26 @@ import {
 /** Keys accepted by /api/ro/listings — do not forward unrelated URL noise. */
 export const LISTINGS_ALLOWED_KEYS = RO_LISTINGS_SUPPORTED_PARAM_KEYS;
 
+/** Text-based location filters — mutually exclusive with geo (`nearLat`/`nearLng`) on the same request. */
+const RO_LISTING_TEXT_LOCATION_KEYS = ["location", "locations", "city", "county"] as const;
+
+/**
+ * Enforce a single location mode so `/api/ro/listings` never mixes resolved coords with text location params.
+ *
+ * - `geo`: keep only nearLat/nearLng (+ radius when set elsewhere); strip city/county/location.*
+ * - `location`: text/county/city (+ optional radius around that area); strip only geo carry-over from URL.
+ */
+export function applyRoListingsFetchLocationMode(sp: URLSearchParams, mode: "geo" | "location"): void {
+  if (mode === "geo") {
+    for (const k of RO_LISTING_TEXT_LOCATION_KEYS) {
+      sp.delete(k);
+    }
+  } else {
+    sp.delete("nearLat");
+    sp.delete("nearLng");
+  }
+}
+
 export function buildListingsApiParams(
   sp: URLSearchParams,
   from: number,
