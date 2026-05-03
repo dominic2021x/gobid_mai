@@ -980,11 +980,15 @@ html.dark .auction-card-skeleton-price {
     max-width: 100%;
   }
 
-  /* iOS: evitat zoom la focus pe câmpuri – font-size sub 16px declanșează zoom automat */
-  input,
+  /* iOS Safari: sub 16px pe focus face zoom; clasele Tailwind cu ! (ex. !text-sm) altfel suprascriu.
+     !important aici e necesar ca să bată utilitățile; exclude controale care nu sunt „câmp text”. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]):not(
+      [type="button"]
+    ):not([type="submit"]):not([type="reset"]):not([type="image"]),
   select,
-  textarea {
-    font-size: max(1rem, 16px);
+  textarea,
+  [contenteditable="true"] {
+    font-size: max(1rem, 16px) !important;
   }
 
   h1,
